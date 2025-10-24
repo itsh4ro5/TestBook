@@ -146,7 +146,7 @@ HTML_TEMPLATE = """
                     <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">📖 Section:</span><span class="text-gray-600 dark:text-gray-400 text-right">_SECTION_</span></div>
                     <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">🧠 Subsection:</span><span class="text-gray-600 dark:text-gray-400 text-right">_SUBSECTION_</span></div>
                     <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">✅ Correct:</span><span class="text-green-500 font-bold text-right notranslate">_CORRECT_MARKS_DISPLAY_</span></div>
-                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">❌ Incorrect:</span><span class="text-red-500 font-bold text-right notranslate">_INCORRECT_MARKS_DISPLAY_</span></div> {/* FIX: Sign will be handled here */}
+                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">❌ Incorrect:</span><span class="text-red-500 font-bold text-right notranslate">_INCORRECT_MARKS_DISPLAY_</span></div> 
                 </div>
                 <div class="grid grid-cols-3 gap-4 text-center">
                     <div><p class="text-2xl font-bold text-indigo-500 notranslate">_QUESTIONS_</p><p class="text-xs text-gray-500 dark:text-gray-400">Questions</p></div>
@@ -164,7 +164,7 @@ HTML_TEMPLATE = """
     </div>
     <div id="quiz-screen" class="hidden">
         <header class="card sticky top-0 z-10 p-3 sm:p-4 shadow-md rounded-none flex flex-col sm:flex-row justify-between items-center gap-2">
-            <div class="text-center sm:text-left"><h1 id="quiz-title" class="text-lg sm:text-xl font-bold"></h1><div class="flex gap-4 text-xs sm:text-sm mt-1"><span><i class="fas fa-check text-green-500"></i> <span class="notranslate">_CORRECT_MARKS_DISPLAY_</span> Marks</span><span><i class="fas fa-times text-red-500"></i> <span class="notranslate">_INCORRECT_MARKS_DISPLAY_</span> Mark</span></div></div> {/* FIX: Sign will be handled here */}
+            <div class="text-center sm:text-left"><h1 id="quiz-title" class="text-lg sm:text-xl font-bold"></h1><div class="flex gap-4 text-xs sm:text-sm mt-1"><span><i class="fas fa-check text-green-500"></i> <span class="notranslate">_CORRECT_MARKS_DISPLAY_</span> Marks</span><span><i class="fas fa-times text-red-500"></i> <span class="notranslate">_INCORRECT_MARKS_DISPLAY_</span> Mark</span></div></div> 
             <div class="flex items-center gap-2 sm:gap-4">
                 <div id="timer" class="text-base sm:text-lg font-bold bg-blue-200 dark:bg-blue-700 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg notranslate"><i class="fas fa-clock"></i> <span id="time">00:00</span></div>
                 <button id="lang-switch-btn" onclick="openLanguageModal()" class="bg-green-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg hover:bg-green-600"><i class="fas fa-language"></i></button>
@@ -846,5 +846,6 @@ if __name__ == '__main__':
         f.write(generated_html)
         
     print("Generated sample_output.html")
+
 
 
