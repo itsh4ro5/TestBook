@@ -1034,12 +1034,10 @@ def main():
     if not init_extractor():
         logger.warning("Bot shuru ho raha hai, lekin Testbook Token set nahi hai. /settoken ka istemal karein.")
 
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # *** YEH HAI FIX ***
-    # JobQueue ka istemal karne ke bajaye, post_init ka istemal karein
-    application.post_init(set_bot_commands)
-    # *** END FIX ***
+    # --- YEH HAI FIX ---
+    # Application builder mein post_init pass karein
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(set_bot_commands).build()
+    # --- END FIX ---
 
     # --- NAYA HANDLER: Bulk Download Conversation ---
     bulk_download_conv = ConversationHandler(
@@ -1097,9 +1095,6 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
 
     logger.info("Bot shuru ho raha hai...")
-    
-    # Bot commands set karein (async) - YAHAN SE HATA DIYA GAYA
-    # application.job_queue.run_once(set_bot_commands, 0) # <--- YEH GALAT THA
     
     # Bot ko run karein
     application.run_polling()
