@@ -75,7 +75,10 @@ def admin_required(func):
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user = update.effective_user
         if not user or not is_admin(user.id):
-            await update.message.reply_text("⛔ Sorry, yeh command sirf admins ke liye hai.")
+            if update.message:
+                await update.message.reply_text("⛔ Sorry, yeh command sirf admins ke liye hai.")
+            elif update.callback_query:
+                await update.callback_query.answer("⛔ Sorry, yeh command sirf admins ke liye hai.", show_alert=True)
             return
         return await func(update, context, *args, **kwargs)
     return wrapped
@@ -86,7 +89,10 @@ def owner_required(func):
     async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user = update.effective_user
         if not user or user.id != BOT_OWNER_ID:
-            await update.message.reply_text("⛔ Sorry, yeh command sirf bot owner ke liye hai.")
+            if update.message:
+                await update.message.reply_text("⛔ Sorry, yeh command sirf bot owner ke liye hai.")
+            elif update.callback_query:
+                await update.callback_query.answer("⛔ Sorry, yeh command sirf bot owner ke liye hai.", show_alert=True)
             return
         return await func(update, context, *args, **kwargs)
     return wrapped
@@ -99,7 +105,8 @@ async def clear_previous_message(context: ContextTypes.DEFAULT_TYPE, chat_id: in
         except (BadRequest, Forbidden) as e:
             logger.warning(f"Purana message delete nahi kar paya: {e}")
         finally:
-            del context.user_data['last_bot_message_id']
+            # Delete hone par ya fail hone par, key ko hata dein
+            context.user_data.pop('last_bot_message_id', None)
             
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     """Naya main menu (search bar ke saath) bhejta hai."""
@@ -454,6 +461,7 @@ async def subsection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Purana message delete karein (kyonki hum file bhej rahe hain)
         await query.delete_message()
+        context.user_data.pop('last_bot_message_id', None) # Stored ID ko bhi clear karein
         
         message = await context.bot.send_document(
             chat_id=query.effective_chat.id,
@@ -549,6 +557,7 @@ async def search_slug_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     # Fake update object banayein taaki hum series_selection_handler ko call kar sakein
     class FakeMessage:
         async def reply_text(*args, **kwargs):
+            # Text search ke baad, hum naya message bhejenge, edit nahi karenge
             return await query.message.reply_text(*args, **kwargs)
         
     class FakeUpdate:
@@ -557,12 +566,12 @@ async def search_slug_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     context.args = [series_slug]
     await series_selection_handler(FakeUpdate(), context)
-    await query.delete_message()
+    await query.delete_message() # Purane search result message ko delete karein
 
 
 async def process_single_test_download(update: Update, context: ContextTypes.DEFAULT_TYPE, selected_test: dict):
     """Ek single test ko download aur send karta hai."""
-    await update.message.reply_text(f"⏳ **Processing...**\n`{selected_test.get('title')}`\n\nTest extract karne mein 1-2 minute lag sakte hain...", parse_mode=ParseMode.MARKDOWN)
+    processing_message = await update.message.reply_text(f"⏳ **Processing...**\n`{selected_test.get('title')}`\n\nTest extract karne mein 1-2 minute lag sakte hain...", parse_mode=ParseMode.MARKDOWN)
     
     try:
         test_id = selected_test.get('id')
@@ -573,7 +582,7 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
         questions_data = extractor.extract_questions(test_id)
         
         if questions_data.get('error'):
-            await update.message.reply_text(f"Error: {questions_data.get('error')}")
+            await processing_message.edit_text(f"Error: {questions_data.get('error')}")
             return
             
         # Caption generate karein
@@ -598,6 +607,9 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
             parse_mode=ParseMode.MARKDOWN
         )
         
+        # Processing message delete karein
+        await processing_message.delete()
+        
         # Auto-forward karein (agar set hai)
         config = get_config()
         channel_id = config.get('forward_channel_id')
@@ -614,7 +626,7 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
 
     except Exception as e:
         logger.error(f"Test download/send karne mein error: {e}")
-        await update.message.reply_text(f"Test process karne mein ek error aaya: {e}")
+        await processing_message.edit_text(f"Test process karne mein ek error aaya: {e}")
 
 
 # =============================================================================
@@ -641,6 +653,9 @@ async def series_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     context.args = [series_slug]
+    # series_selection_handler ke liye message text ki zaroorat nahi hai,
+    # lekin context.args[0] (slug) ki zaroorat hai.
+    # Hum seedha handler call karenge.
     await series_selection_handler(FakeUpdate(), context)
 
 @admin_required
@@ -648,7 +663,13 @@ async def section_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     """'Back to Subsections' (Section detail) button handle karta hai."""
     query = update.callback_query
     await query.answer()
-    await section_callback(update, context) # Seedha section_callback call karein
+    # Puraane logic ko call karne ke bajaye, hum series_callback ko call karenge
+    # jo section list ko dobara render karega.
+    # Iske liye humein context se section_index hatana hoga taaki
+    # section_callback sahi se kaam kare.
+    context.user_data.pop('current_section_index', None)
+    context.user_data.pop('selected_section', None)
+    await series_callback(update, context) # Yeh sections ki list dikhayega
 
 @admin_required
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -697,14 +718,15 @@ async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_T
     extractor_name = update.message.text.strip()
     context.user_data['bulk_extractor_name'] = extractor_name
     
-    # Pichhla message delete karein
+    # Pichhla message delete karein (jo "Extractor ka Naam" pooch raha tha)
     chat_id = update.effective_chat.id
     if 'last_bot_message_id' in context.user_data:
          try:
+            # ConversationHandler mein, last message ID message ka hi ID hota hai
             await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
          except Exception: pass # Fail hone par ignore karein
             
-    # User ka message delete karein
+    # User ka message (naam) delete karein
     try:
         await update.message.delete()
     except Exception: pass
@@ -722,7 +744,7 @@ async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_T
     )
     
     message = await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-    context.user_data['last_bot_message_id'] = message.message_id
+    context.user_data['last_bot_message_id'] = message.message_id # Naya message ID store karein
 
     return ASK_DESTINATION
 
@@ -734,14 +756,14 @@ async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE
     destination_input = update.message.text.strip()
     context.user_data['bulk_destination'] = destination_input
     
-    # Pichhla message delete karein
+    # Pichhla message delete karein (jo "Destination Chunein" pooch raha tha)
     chat_id = update.effective_chat.id
     if 'last_bot_message_id' in context.user_data:
          try:
             await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
          except Exception: pass
             
-    # User ka message delete karein
+    # User ka message (destination) delete karein
     try:
         await update.message.delete()
     except Exception: pass
@@ -856,7 +878,7 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
         # --- Asli Download Loop ---
-        start_time = asyncio.get_event_loop().time()
+        last_update_time = asyncio.get_event_loop().time()
         completed_tests = 0
 
         for test, sec, sub in tests_to_process:
@@ -899,18 +921,26 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                 
                 # 5. Progress update karein
                 current_time = asyncio.get_event_loop().time()
-                # Har 5 file ya 2 second mein message update karein (Telegram limit se bachne ke liye)
-                if completed_tests % 5 == 0 or current_time - start_time > 2:
-                    start_time = current_time # Timer reset
+                # Har 5 file ya 3 second mein message update karein (Telegram limit se bachne ke liye)
+                if completed_tests % 5 == 0 or current_time - last_update_time > 3:
+                    last_update_time = current_time # Timer reset
                     progress = completed_tests / total_tests
                     bar = "🟩" * int(progress * 10) + "⬜️" * (10 - int(progress * 10))
-                    await progress_message.edit_text(
-                        f"📥 Download ho raha hai...\n\n"
-                        f"Progess: {bar} {completed_tests}/{total_tests} ({int(progress * 100)}%)\n\n"
-                        f"File: `{file_name}`\n"
-                        f"Destination: `{final_chat_id}`\n\n"
-                        "Rokne ke liye /stop type karein."
-                    )
+                    
+                    try:
+                        await progress_message.edit_text(
+                            f"📥 Download ho raha hai...\n\n"
+                            f"Progess: {bar} {completed_tests}/{total_tests} ({int(progress * 100)}%)\n\n"
+                            f"File: `{file_name}`\n"
+                            f"Destination: `{final_chat_id}`\n\n"
+                            "Rokne ke liye /stop type karein.",
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                    except BadRequest as e:
+                        if "message is not modified" in str(e):
+                            pass # Agar message same hai toh error ignore karein
+                        else:
+                            raise # Doosra error hai toh raise karein
                 
                 await asyncio.sleep(1) # Telegram API rate limit se bachne ke liye
                 
@@ -985,10 +1015,13 @@ async def set_bot_commands(application: Application):
         admins = load_json(ADMIN_FILE, {'admin_ids': []})
         for admin_id in admins.get('admin_ids', []):
             if admin_id != BOT_OWNER_ID:
-                await application.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+                try:
+                    await application.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+                except Exception as e:
+                    logger.warning(f"Admin {admin_id} ke liye commands set nahi kar paya (shayad bot block hai): {e}")
                 
     except Exception as e:
-        logger.warning(f"Bot commands set karne mein error (shayad bot naya hai): {e}")
+        logger.warning(f"Bot commands set karne mein error: {e}")
 
 def main():
     """Bot ko run karta hai."""
@@ -1002,6 +1035,11 @@ def main():
         logger.warning("Bot shuru ho raha hai, lekin Testbook Token set nahi hai. /settoken ka istemal karein.")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # *** YEH HAI FIX ***
+    # JobQueue ka istemal karne ke bajaye, post_init ka istemal karein
+    application.post_init(set_bot_commands)
+    # *** END FIX ***
 
     # --- NAYA HANDLER: Bulk Download Conversation ---
     bulk_download_conv = ConversationHandler(
@@ -1017,7 +1055,8 @@ def main():
             CommandHandler("cancel", cancel_bulk_conversation),
             CommandHandler("stop", stop_bulk_download)
         ],
-        conversation_timeout=300 # 5 minute timeout
+        conversation_timeout=300, # 5 minute timeout
+        per_message=False # Performance ke liye behtar
     )
     
     application.add_handler(bulk_download_conv)
@@ -1059,8 +1098,8 @@ def main():
 
     logger.info("Bot shuru ho raha hai...")
     
-    # Bot commands set karein (async)
-    application.job_queue.run_once(set_bot_commands, 0)
+    # Bot commands set karein (async) - YAHAN SE HATA DIYA GAYA
+    # application.job_queue.run_once(set_bot_commands, 0) # <--- YEH GALAT THA
     
     # Bot ko run karein
     application.run_polling()
