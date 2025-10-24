@@ -1,0 +1,5 @@
+
+pycache/*.pyc
+.env
+.flask_session/
+.DS_Store
