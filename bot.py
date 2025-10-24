@@ -2,10 +2,10 @@
 import os
 import json
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, BotCommand, InlineQueryResultArticle, InputTextMessageContent, BotCommandScopeChat
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes, 
-    ConversationHandler, MessageHandler, filters
+    ConversationHandler, MessageHandler, filters, InlineQueryHandler
 )
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
@@ -1067,4 +1067,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
