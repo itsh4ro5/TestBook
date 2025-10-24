@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 ADMIN_FILE = 'admins.json'
 CONFIG_FILE = 'config.json'
 
+# --- State Definitions for User Input ---
+# Flags to track what the bot expects next
+STATE_WAITING_SEARCH_NUM = 'awaiting_search_num'
+STATE_WAITING_SECTION_NUM = 'awaiting_section_num'
+STATE_WAITING_TEST_NUM = 'awaiting_test_num' # After txt file
+
 # --- State Definitions for Bulk Download ---
 ASK_EXTRACTOR_NAME, ASK_DESTINATION = range(2)
 
@@ -112,14 +118,21 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     """Naya main menu (search bar ke saath) bhejta hai."""
     chat_id = update.effective_chat.id
     await clear_previous_message(context, chat_id)
-    
-    keyboard = [[InlineKeyboardButton("🔍 Search New Test", switch_inline_query_current_chat="")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    # Clear state when returning to main menu
+    context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
+    context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
+    context.user_data.pop(STATE_WAITING_TEST_NUM, None)
+    context.user_data.pop('search_results', None)
+    context.user_data.pop('series_details', None)
+    context.user_data.pop('last_tests', None) # Combined tests list
+
+    # keyboard = [[InlineKeyboardButton("🔍 Search New Test", switch_inline_query_current_chat="")]] # Removed inline search
+    # reply_markup = InlineKeyboardMarkup(keyboard)
     
     message = await context.bot.send_message(
         chat_id,
-        text=text,
-        reply_markup=reply_markup,
+        text=text + "\n\nTest search karne ke liye `/search <query>` type karein.", # Instruct user on how to search
+        # reply_markup=reply_markup, # Removed inline search button
         parse_mode=ParseMode.HTML
     )
     context.user_data['last_bot_message_id'] = message.message_id
@@ -277,8 +290,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     welcome_text = (
         f"👋 **Welcome, {user.first_name}!**\n\n"
-        "Main Testbook Extractor Bot hoon. Main aapke liye tests extract kar sakta hoon.\n\n"
-        "Naya test search karne ke liye neeche diye gaye '🔍 Search New Test' button par click karein."
+        "Main Testbook Extractor Bot hoon. Main aapke liye tests extract kar sakta hoon."
     )
     await send_main_menu(update, context, welcome_text)
 
@@ -288,309 +300,260 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_main_menu(update, context, "🏠 Main Menu")
 
 @admin_required
-async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inline search requests handle karta hai."""
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the /search command."""
     if not extractor:
-        await update.inline_query.answer([], switch_pm_text="Bot initialized nahi hai (Token set karein)", switch_pm_parameter="start")
+        await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
         return
-        
-    query = update.inline_query.query
+
+    query = " ".join(context.args)
     if not query:
-        await update.inline_query.answer([], switch_pm_text="Search karne ke liye type karein...", switch_pm_parameter="start")
+        await update.message.reply_text("Usage: `/search <search query>`", parse_mode=ParseMode.MARKDOWN)
         return
 
     try:
         search_results = extractor.search(query)
-        results = []
-        
-        if search_results:
-            for i, series in enumerate(search_results[:20]): # Limit 20 results
-                series_id = series.get('slug')
-                series_name = series.get('name', 'Unknown Series')
-                tests_count = series.get('testsCount', 0)
-                
-                results.append(
-                    InlineQueryResultArticle(
-                        id=f"series_{series_id}_{i}",
-                        title=series_name,
-                        description=f"{tests_count} tests available",
-                        input_message_content=InputTextMessageContent(
-                            f"/select_series {series_id}", # Hum slug ka istemal karenge
-                            parse_mode=ParseMode.MARKDOWN
-                        )
-                    )
-                )
-        
-        await update.inline_query.answer(results, cache_time=5)
-
-    except Exception as e:
-        logger.error(f"Inline query mein error: {e}")
-
-@admin_required
-async def series_selection_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inline query se select ki gayi series ko handle karta hai."""
-    if not extractor:
-        await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
-        return
-        
-    try:
-        series_slug = context.args[0]
-        context.user_data['current_series_slug'] = series_slug
-        
-        details = extractor.get_series_details(series_slug)
-        if not details:
-            await update.message.reply_text("Error: Is series ki details nahi mil saki.")
+        if not search_results:
+            await update.message.reply_text(f"'{query}' ke liye koi results nahi mile.")
             return
 
-        context.user_data['series_details'] = details
-        sections = details.get('sections', [])
+        context.user_data['search_results'] = search_results # Store full results
+        results_text = f"🔍 **Results for '{query}'**\n\n"
         
-        keyboard = []
-        for i, section in enumerate(sections):
-            section_name = section.get('name', 'N/A')
-            callback_data = f"section_{i}"
-            keyboard.append([InlineKeyboardButton(section_name, callback_data=callback_data)])
+        for i, series in enumerate(search_results[:20]): # Show top 20
+            series_name = series.get('name', 'Unknown Series')
+            tests_count = series.get('testsCount', 0)
+            results_text += f"**{i+1}.** {series_name} ({tests_count} tests)\n"
         
-        # Bulk Download Button (Section Level)
-        keyboard.append([InlineKeyboardButton("📥 Download All Tests in this Series", callback_data=f"bulk_section_all")])
-        keyboard.append([InlineKeyboardButton("« Back to Main Menu", callback_data="main_menu")])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        results_text += "\nSeries select karne ke liye **number** reply karein."
         
         await clear_previous_message(context, update.effective_chat.id)
-        message = await update.message.reply_text(
-            f"📚 **{details.get('name')}**\n\nEk section chunein:",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
+        message = await update.message.reply_text(results_text, parse_mode=ParseMode.MARKDOWN)
         context.user_data['last_bot_message_id'] = message.message_id
-        
-    except (IndexError, ValueError):
-        await update.message.reply_text("Invalid command.")
+        context.user_data[STATE_WAITING_SEARCH_NUM] = True # Set state
+
     except Exception as e:
-        logger.error(f"Series selection mein error: {e}")
-        await update.message.reply_text("Series select karne mein error aaya.")
-
-
-@admin_required
-async def section_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Section button press handle karta hai."""
-    query = update.callback_query
-    await query.answer()
-    
-    try:
-        section_index = int(query.data.split('_')[1])
-        context.user_data['current_section_index'] = section_index
-        
-        details = context.user_data.get('series_details')
-        if not details:
-            await query.edit_message_text("Session expire ho gaya hai. /start se dobara search karein.")
-            return
-
-        selected_section = details['sections'][section_index]
-        context.user_data['selected_section'] = selected_section
-        subsections = selected_section.get('subsections', [])
-        
-        keyboard = []
-        for i, sub in enumerate(subsections):
-            sub_name = sub.get('name', 'N/A')
-            callback_data = f"subsection_{i}"
-            keyboard.append([InlineKeyboardButton(sub_name, callback_data=callback_data)])
-        
-        # Bulk Download Button (Subsection Level)
-        keyboard.append([InlineKeyboardButton(f"📥 Download All in '{selected_section.get('name')}'", callback_data=f"bulk_subsection_all")])
-        keyboard.append([InlineKeyboardButton("« Back to Sections", callback_data="back_to_series")])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            f"🗂️ **{selected_section.get('name')}**\n\nEk subsection chunein:",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-    except (IndexError, ValueError, KeyError):
-        await query.edit_message_text("Error: Section data nahi mila. /start se dobara search karein.")
-        
-@admin_required
-async def subsection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Subsection button press handle karta hai."""
-    query = update.callback_query
-    await query.answer()
-    
-    try:
-        subsection_index = int(query.data.split('_')[1])
-        context.user_data['current_subsection_index'] = subsection_index
-        
-        series_details = context.user_data.get('series_details')
-        selected_section = context.user_data.get('selected_section')
-        if not series_details or not selected_section:
-            await query.edit_message_text("Session expire ho gaya hai. /start se dobara search karein.")
-            return
-
-        selected_subsection = selected_section['subsections'][subsection_index]
-        context.user_data['selected_subsection'] = selected_subsection
-        
-        tests = extractor.get_tests_in_subsection(
-            series_details['id'], 
-            selected_section['id'], 
-            selected_subsection['id']
-        )
-        
-        if not tests:
-            await query.edit_message_text(
-                "Is subsection mein koi tests nahi mile.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Subsections", callback_data=f"back_to_section")]])
-            )
-            return
-            
-        context.user_data['last_tests'] = tests
-        
-        # Tests ko .txt file mein convert karein
-        test_list_str = ""
-        for i, test in enumerate(tests):
-            test_list_str += f"{i+1}. {test.get('title', 'N/A')}\n"
-            
-        test_list_io = io.BytesIO(test_list_str.encode('utf-8'))
-        test_list_io.name = f"{selected_subsection.get('name', 'tests')}.txt"
-        
-        keyboard = [
-            [InlineKeyboardButton(f"📥 Download All in '{selected_subsection.get('name')}'", callback_data=f"bulk_subsection_single")],
-            [InlineKeyboardButton("« Back to Subsections", callback_data="back_to_section")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        # Purana message delete karein (kyonki hum file bhej rahe hain)
-        await query.delete_message()
-        context.user_data.pop('last_bot_message_id', None) # Stored ID ko bhi clear karein
-        
-        message = await context.bot.send_document(
-            chat_id=query.effective_chat.id,
-            document=test_list_io,
-            caption=(
-                f"📂 **{selected_subsection.get('name')}**\n\n"
-                f"Is subsection mein {len(tests)} tests mile hain.\n\n"
-                "Test download karne ke liye, list se **test ka number** (jaise `5`) copy karke mujhe reply karein."
-            ),
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        context.user_data['last_bot_message_id'] = message.message_id
-        
-    except (IndexError, ValueError, KeyError):
-        await query.edit_message_text("Error: Subsection data nahi mila. /start se dobara search karein.")
+        logger.error(f"Search command mein error: {e}")
+        await update.message.reply_text("Search karne mein error aaya.")
 
 @admin_required
 async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Test number (text input) handle karta hai."""
+    """Handles text input based on the current state."""
     if not extractor:
         await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
         return
         
-    try:
-        test_index = int(update.message.text.strip()) - 1 # 1-based index ko 0-based karein
-        
-        tests = context.user_data.get('last_tests')
-        series_details = context.user_data.get('series_details')
-        selected_section = context.user_data.get('selected_section')
-        selected_subsection = context.user_data.get('selected_subsection')
-        
-        if not all([tests, series_details, selected_section, selected_subsection]):
-            await update.message.reply_text("Session expire ho gaya hai ya test list nahi mili. /start se dobara search karein.")
-            return
+    chat_id = update.effective_chat.id
+    text = update.message.text.strip()
 
-        if 0 <= test_index < len(tests):
-            selected_test = tests[test_index]
-            await process_single_test_download(update, context, selected_test)
-        else:
-            await update.message.reply_text(f"Invalid number. Kripya 1 aur {len(tests)} ke beech ka number reply karein.")
+    try:
+        number = int(text) - 1 # Convert to 0-based index
+
+        # --- State 1: Waiting for Search Result Number ---
+        if context.user_data.get(STATE_WAITING_SEARCH_NUM):
+            search_results = context.user_data.get('search_results')
+            if not search_results:
+                await update.message.reply_text("Session expire ho gaya hai. Dobara `/search` karein.", parse_mode=ParseMode.MARKDOWN)
+                return ConversationHandler.END # End conv if applicable
+
+            if 0 <= number < len(search_results):
+                selected_series = search_results[number]
+                series_slug = selected_series.get('slug')
+                
+                details = extractor.get_series_details(series_slug)
+                if not details:
+                    await update.message.reply_text("Error: Is series ki details nahi mil saki.")
+                    context.user_data.pop(STATE_WAITING_SEARCH_NUM, None) # Reset state
+                    return
+
+                context.user_data['series_details'] = details
+                context.user_data['current_series_slug'] = series_slug # Store slug for bulk download context
+                sections = details.get('sections', [])
+                
+                if not sections:
+                    await update.message.reply_text("Is series mein koi sections nahi hain.")
+                    context.user_data.pop(STATE_WAITING_SEARCH_NUM, None) # Reset state
+                    return
+
+                sections_text = f"📚 **{details.get('name')}**\n\nSections:\n"
+                for i, section in enumerate(sections):
+                    sections_text += f"**{i+1}.** {section.get('name', 'N/A')}\n"
+                
+                sections_text += "\nSection select karne ke liye **number** reply karein."
+                
+                # Add bulk download button for the series
+                keyboard = [[InlineKeyboardButton("📥 Download All Tests in this Series", callback_data=f"bulk_section_all")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                await clear_previous_message(context, chat_id)
+                message = await update.message.reply_text(sections_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+                context.user_data['last_bot_message_id'] = message.message_id
+                
+                # Update state
+                context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
+                context.user_data[STATE_WAITING_SECTION_NUM] = True
+            else:
+                await update.message.reply_text(f"Invalid number. Kripya 1 aur {len(search_results)} ke beech ka number reply karein.")
+            return # Don't fall through
+
+        # --- State 2: Waiting for Section Number ---
+        elif context.user_data.get(STATE_WAITING_SECTION_NUM):
+            details = context.user_data.get('series_details')
+            if not details:
+                await update.message.reply_text("Session expire ho gaya hai. Dobara `/search` karein.", parse_mode=ParseMode.MARKDOWN)
+                return
+
+            sections = details.get('sections', [])
+            if 0 <= number < len(sections):
+                selected_section = sections[number]
+                context.user_data['selected_section'] = selected_section # Store for bulk download context
+                subsections = selected_section.get('subsections', [])
+                
+                if not subsections:
+                    await update.message.reply_text("Is section mein koi subsections nahi hain.")
+                    context.user_data.pop(STATE_WAITING_SECTION_NUM, None) # Reset state
+                    return
+
+                await update.message.reply_text(f"⏳ Fetching tests for section '{selected_section.get('name')}'...")
+
+                all_tests_in_section = []
+                combined_test_list_str = ""
+                test_counter = 1
+
+                for i, sub in enumerate(subsections):
+                    combined_test_list_str += f"\n--- {sub.get('name', f'Subsection {i+1}')} ---\n"
+                    tests = extractor.get_tests_in_subsection(
+                        details['id'], 
+                        selected_section['id'], 
+                        sub['id']
+                    )
+                    
+                    if tests:
+                        for test in tests:
+                            # Store test with its context
+                            all_tests_in_section.append({
+                                'test_data': test,
+                                'section_context': selected_section,
+                                'subsection_context': sub
+                            })
+                            combined_test_list_str += f"{test_counter}. {test.get('title', 'N/A')}\n"
+                            test_counter += 1
+                    else:
+                         combined_test_list_str += "(No tests found)\n"
+
+
+                if not all_tests_in_section:
+                    await update.message.reply_text("Is section ke kisi bhi subsection mein tests nahi mile.")
+                    context.user_data.pop(STATE_WAITING_SECTION_NUM, None) # Reset state
+                    return
+
+                context.user_data['last_tests'] = all_tests_in_section # Store combined list with context
+                
+                test_list_io = io.BytesIO(combined_test_list_str.encode('utf-8'))
+                test_list_io.name = f"{selected_section.get('name', 'section_tests')}.txt"
+                
+                # Add bulk download button for the section
+                keyboard = [[InlineKeyboardButton(f"📥 Download All in '{selected_section.get('name')}'", callback_data=f"bulk_subsection_all")]] # Uses section context
+                reply_markup = InlineKeyboardMarkup(keyboard)
+
+                await clear_previous_message(context, chat_id) # Clear the "Fetching..." message
+                message = await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=test_list_io,
+                    caption=(
+                        f"📂 **{selected_section.get('name')}**\n\n"
+                        f"Is section mein {len(all_tests_in_section)} tests mile hain (sabhi subsections mila kar).\n\n"
+                        "Test download karne ke liye, list se **test ka number** (jaise `5`) copy karke mujhe reply karein."
+                    ),
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                context.user_data['last_bot_message_id'] = message.message_id
+                
+                # Update state
+                context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
+                context.user_data[STATE_WAITING_TEST_NUM] = True
+                
+            else:
+                 await update.message.reply_text(f"Invalid number. Kripya 1 aur {len(sections)} ke beech ka number reply karein.")
+            return # Don't fall through
+
+        # --- State 3: Waiting for Test Number (after txt file) ---
+        elif context.user_data.get(STATE_WAITING_TEST_NUM):
+            combined_tests = context.user_data.get('last_tests')
+            series_details = context.user_data.get('series_details') # Keep series details
+
+            if not combined_tests or not series_details:
+                await update.message.reply_text("Session expire ho gaya hai ya test list nahi mili. Dobara `/search` karein.", parse_mode=ParseMode.MARKDOWN)
+                context.user_data.pop(STATE_WAITING_TEST_NUM, None) # Reset state
+                return
+
+            if 0 <= number < len(combined_tests):
+                selected_test_info = combined_tests[number]
+                
+                # Pass the correct context to the download function
+                await process_single_test_download(
+                    update, 
+                    context, 
+                    selected_test_info['test_data'],
+                    selected_test_info['section_context'],
+                    selected_test_info['subsection_context']
+                )
+                # Keep the state STATE_WAITING_TEST_NUM active to allow downloading more tests from the same list
+            else:
+                await update.message.reply_text(f"Invalid number. Kripya 1 aur {len(combined_tests)} ke beech ka number reply karein.")
+            return # Don't fall through
             
+        # --- No Specific State ---
+        else:
+            # If no state is set, treat as a normal text message (could be a search query)
+             await update.message.reply_text("Command samajh nahi aaya. Test search karne ke liye `/search <query>` type karein.", parse_mode=ParseMode.MARKDOWN)
+
     except (ValueError, TypeError):
-        # Agar text number nahi hai, toh use search query maanein
-        await handle_search_as_text(update, context)
+        # If text is not a number and no state is active, treat as search
+        if not context.user_data.get(STATE_WAITING_SEARCH_NUM) and \
+           not context.user_data.get(STATE_WAITING_SECTION_NUM) and \
+           not context.user_data.get(STATE_WAITING_TEST_NUM):
+            await update.message.reply_text("Command samajh nahi aaya. Test search karne ke liye `/search <query>` type karein.", parse_mode=ParseMode.MARKDOWN)
+        else:
+            # If expecting a number but got text
+             await update.message.reply_text("Invalid input. Kripya ek number type karein.")
+             
     except Exception as e:
         logger.error(f"Text input handle karne mein error: {e}")
-        await update.message.reply_text("Test process karne mein error aaya.")
-
-async def handle_search_as_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Agar text number nahi hai, toh use search query maanta hai."""
-    if not extractor:
-        await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
-        return
-        
-    query = update.message.text
-    search_results = extractor.search(query)
-    
-    if not search_results:
-        await update.message.reply_text(f"'{query}' ke liye koi results nahi mile.")
-        return
-
-    results_text = f"🔍 **Results for '{query}'**\n\n"
-    keyboard = []
-    
-    for i, series in enumerate(search_results[:10]): # Limit 10 results for text
-        series_slug = series.get('slug')
-        series_name = series.get('name', 'Unknown Series')
-        tests_count = series.get('testsCount', 0)
-        
-        results_text += f"**{i+1}. {series_name}** ({tests_count} tests)\n"
-        keyboard.append([InlineKeyboardButton(f"{i+1}. {series_name[:30]}...", callback_data=f"search_slug_{series_slug}")])
-    
-    keyboard.append([InlineKeyboardButton("« Back to Main Menu", callback_data="main_menu")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await clear_previous_message(context, update.effective_chat.id)
-    message = await update.message.reply_text(
-        results_text + "\nSelect a series:",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
-    context.user_data['last_bot_message_id'] = message.message_id
-
-@admin_required
-async def search_slug_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Text search se aaye series slug callback ko handle karta hai."""
-    query = update.callback_query
-    await query.answer()
-    
-    series_slug = query.data.split('_', 2)[2] # "search_slug_" ke baad sab kuch
-    
-    # Fake update object banayein taaki hum series_selection_handler ko call kar sakein
-    class FakeMessage:
-        async def reply_text(*args, **kwargs):
-            # Text search ke baad, hum naya message bhejenge, edit nahi karenge
-            return await query.message.reply_text(*args, **kwargs)
-        
-    class FakeUpdate:
-        effective_chat = update.effective_chat
-        message = FakeMessage()
-
-    context.args = [series_slug]
-    await series_selection_handler(FakeUpdate(), context)
-    await query.delete_message() # Purane search result message ko delete karein
+        await update.message.reply_text("Kuch error aaya. Dobara try karein.")
+        # Reset states on error
+        context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
+        context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
+        context.user_data.pop(STATE_WAITING_TEST_NUM, None)
 
 
-async def process_single_test_download(update: Update, context: ContextTypes.DEFAULT_TYPE, selected_test: dict):
-    """Ek single test ko download aur send karta hai."""
+# --- Modified process_single_test_download to accept context ---
+async def process_single_test_download(update: Update, context: ContextTypes.DEFAULT_TYPE, selected_test: dict, section_context: dict, subsection_context: dict):
+    """Ek single test ko download aur send karta hai, section/subsection context ke saath."""
     processing_message = await update.message.reply_text(f"⏳ **Processing...**\n`{selected_test.get('title')}`\n\nTest extract karne mein 1-2 minute lag sakte hain...", parse_mode=ParseMode.MARKDOWN)
     
     try:
         test_id = selected_test.get('id')
-        series_details = context.user_data.get('series_details')
-        selected_section = context.user_data.get('selected_section')
-        selected_subsection = context.user_data.get('selected_subsection')
+        series_details = context.user_data.get('series_details') # Get series details from context
+
+        if not series_details:
+             await processing_message.edit_text("Error: Series details nahi mile. Session expire ho gaya hoga.")
+             return
 
         questions_data = extractor.extract_questions(test_id)
         
         if questions_data.get('error'):
-            await processing_message.edit_text(f"Error: {questions_data.get('error')}")
+            await processing_message.edit_text(f"Error extracting test: {questions_data.get('error')}")
             return
             
-        # Caption generate karein
+        # Caption generate karein using passed context
         caption = extractor.get_caption(
             test_summary=selected_test,
             series_details=series_details,
-            selected_section=selected_section,
-            subsection_context=selected_subsection
+            selected_section=section_context,
+            subsection_context=subsection_context
+            # Extractor name is not needed for single download
         )
         
         # HTML generate karein (extractor.last_details ka istemal karega)
@@ -630,50 +593,14 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
 
 
 # =============================================================================
-# === NAVIGATION CALLBACKS ===
+# === NAVIGATION CALLBACKS (REMOVED/SIMPLIFIED) ===
 # =============================================================================
-
-@admin_required
-async def series_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """'Back to Sections' (Series detail) button handle karta hai."""
-    query = update.callback_query
-    await query.answer()
-    
-    # Fake update object
-    class FakeMessage:
-        async def reply_text(*args, **kwargs):
-            return await query.message.edit_text(*args, **kwargs)
-    class FakeUpdate:
-        effective_chat = update.effective_chat
-        message = FakeMessage()
-
-    series_slug = context.user_data.get('current_series_slug')
-    if not series_slug:
-        await query.edit_message_text("Session expire ho gaya hai. /start se dobara search karein.")
-        return
-        
-    context.args = [series_slug]
-    # series_selection_handler ke liye message text ki zaroorat nahi hai,
-    # lekin context.args[0] (slug) ki zaroorat hai.
-    # Hum seedha handler call karenge.
-    await series_selection_handler(FakeUpdate(), context)
-
-@admin_required
-async def section_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """'Back to Subsections' (Section detail) button handle karta hai."""
-    query = update.callback_query
-    await query.answer()
-    # Puraane logic ko call karne ke bajaye, hum series_callback ko call karenge
-    # jo section list ko dobara render karega.
-    # Iske liye humein context se section_index hatana hoga taaki
-    # section_callback sahi se kaam kare.
-    context.user_data.pop('current_section_index', None)
-    context.user_data.pop('selected_section', None)
-    await series_callback(update, context) # Yeh sections ki list dikhayega
+# Back buttons are removed as navigation is now text/number based via /search
+# User can use /menu or /search again to navigate.
 
 @admin_required
 async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """'Back to Main Menu' button handle karta hai."""
+    """Handles the 'Back to Main Menu' button potentially left on old messages."""
     query = update.callback_query
     await query.answer()
     
@@ -683,12 +610,18 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         effective_chat = update.effective_chat
     
     await send_main_menu(FakeUpdate(), context, "🏠 Main Menu")
-    await query.delete_message()
+    try:
+        await query.delete_message()
+    except Exception:
+        pass
 
 
 # =============================================================================
 # === BULK DOWNLOAD CONVERSATION ===
 # =============================================================================
+# This part remains largely the same, but the entry point pattern needs checking.
+# Let's keep the CallbackQueryHandler entry points for now, they are attached to messages
+# sent after text-based selection.
 
 @admin_required
 async def bulk_download_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -706,8 +639,16 @@ async def bulk_download_start(update: Update, context: ContextTypes.DEFAULT_TYPE
         "Cancel karne ke liye /cancel type karein."
     )
     
-    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
-    
+    # Edit the message containing the button
+    try:
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+        context.user_data['last_bot_message_id'] = query.message.message_id # Store ID for deletion later
+    except BadRequest as e:
+        if "message is not modified" in str(e): pass
+        else: logger.error(f"Bulk start edit error: {e}")
+    except Exception as e:
+         logger.error(f"Bulk start edit error: {e}")
+
     return ASK_EXTRACTOR_NAME
 
 @admin_required
@@ -718,15 +659,16 @@ async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_T
     extractor_name = update.message.text.strip()
     context.user_data['bulk_extractor_name'] = extractor_name
     
-    # Pichhla message delete karein (jo "Extractor ka Naam" pooch raha tha)
     chat_id = update.effective_chat.id
+    
+    # Try deleting the "Extractor ka Naam" prompt
     if 'last_bot_message_id' in context.user_data:
-         try:
-            # ConversationHandler mein, last message ID message ka hi ID hota hai
+        try:
             await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
-         except Exception: pass # Fail hone par ignore karein
+            # Don't pop yet, need it for the next message
+        except Exception: pass
             
-    # User ka message (naam) delete karein
+    # Delete the user's message (the name)
     try:
         await update.message.delete()
     except Exception: pass
@@ -743,8 +685,9 @@ async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_T
         "Cancel karne ke liye /cancel type karein."
     )
     
-    message = await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-    context.user_data['last_bot_message_id'] = message.message_id # Naya message ID store karein
+    # Send the new prompt
+    message = await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+    context.user_data['last_bot_message_id'] = message.message_id # Store ID for the next step
 
     return ASK_DESTINATION
 
@@ -756,39 +699,44 @@ async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE
     destination_input = update.message.text.strip()
     context.user_data['bulk_destination'] = destination_input
     
-    # Pichhla message delete karein (jo "Destination Chunein" pooch raha tha)
     chat_id = update.effective_chat.id
+
+    # Try deleting the "Destination Chunein" prompt
     if 'last_bot_message_id' in context.user_data:
          try:
             await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
          except Exception: pass
+         context.user_data.pop('last_bot_message_id', None) # Clean up the ID
             
-    # User ka message (destination) delete karein
+    # Delete the user's message (the destination)
     try:
         await update.message.delete()
     except Exception: pass
         
-    # Async task shuru karein (taaki bot block na ho)
+    # Start the background task
     asyncio.create_task(perform_bulk_download(update, context))
     
-    # Conversation khatm karein
+    # End the conversation
     return ConversationHandler.END
 
 async def cancel_bulk_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bulk download conversation ko cancel karta hai."""
     await clear_previous_message(context, update.effective_chat.id)
     
-    await update.message.reply_text("Bulk download cancel kar diya gaya hai.")
+    # Send cancellation message if triggered by command
+    if update.message:
+        await update.message.reply_text("Bulk download cancel kar diya gaya hai.")
     
-    # Cleanup
+    # Cleanup user data specific to bulk download
     context.user_data.pop('bulk_query_data', None)
     context.user_data.pop('bulk_extractor_name', None)
     context.user_data.pop('bulk_destination', None)
     
+    # Send main menu again
     await send_main_menu(update, context, "🏠 Main Menu")
     return ConversationHandler.END
 
-# --- Bulk Download Logic (Updated) ---
+# --- Bulk Download Logic (Unchanged from previous version) ---
 async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Asynchronously sabhi tests ko download aur forward karta hai.
@@ -804,7 +752,7 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
     extractor_name = context.user_data.get('bulk_extractor_name')
     destination = context.user_data.get('bulk_destination')
     
-    # Stop flag set karein
+    # Stop flag set karein in bot_data using user_chat_id as key
     context.bot_data[user_chat_id] = {STOP_BULK_DOWNLOAD_FLAG: False}
 
     try:
@@ -818,60 +766,73 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
             final_chat_id = config.get('forward_channel_id')
             if not final_chat_id:
                 await context.bot.send_message(user_chat_id, "Error: Aapne default channel chuna, lekin koi default channel set nahi hai. /setchannel ka istemal karein.")
-                return
+                return ConversationHandler.END # End here if default channel not set
         elif destination.startswith('@') or destination.startswith('-100'):
             final_chat_id = destination
         else:
             await context.bot.send_message(user_chat_id, "Error: Invalid destination input. Process cancel kar diya gaya hai.")
-            return
+            return ConversationHandler.END # End here for invalid input
 
         # 2. Tests ki list fetch karein
         series_details = context.user_data.get('series_details')
         if not series_details:
             await context.bot.send_message(user_chat_id, "Error: Session expire ho gaya hai. /start se dobara search karein.")
-            return
+            return ConversationHandler.END
 
         tests_to_process = []
-        parts = query_data.split('_') # e.g., "bulk_section_all" ya "bulk_subsection_single"
-        
-        if parts[1] == "section":
-            # Poori series ke sabhi sections ke sabhi subsections ke tests
-            for sec in series_details.get('sections', []):
-                for sub in sec.get('subsections', []):
+        parts = query_data.split('_') # e.g., "bulk_section_all" or "bulk_subsection_single"
+        bulk_level_name = series_details.get('name', 'Series') # Default name
+
+        if parts[1] == "section": # Download all tests in the entire series
+            bulk_level_name = series_details.get('name', 'Series')
+            for sec_idx, sec in enumerate(series_details.get('sections', [])):
+                for sub_idx, sub in enumerate(sec.get('subsections', [])):
                     tests = extractor.get_tests_in_subsection(series_details['id'], sec['id'], sub['id'])
                     if tests:
                         tests_to_process.extend([(test, sec, sub) for test in tests])
                         
-        elif parts[1] == "subsection":
+        elif parts[1] == "subsection": # Download related to a specific section
             selected_section = context.user_data.get('selected_section')
             if not selected_section:
                 await context.bot.send_message(user_chat_id, "Error: Section data nahi mila. /start se dobara search karein.")
-                return
-                
-            if parts[2] == "all":
-                # Current section ke sabhi subsections ke tests
-                for sub in selected_section.get('subsections', []):
+                return ConversationHandler.END
+            bulk_level_name = selected_section.get('name', 'Section')
+
+            if parts[2] == "all": # Download all tests in the selected section
+                for sub_idx, sub in enumerate(selected_section.get('subsections', [])):
                     tests = extractor.get_tests_in_subsection(series_details['id'], selected_section['id'], sub['id'])
                     if tests:
                         tests_to_process.extend([(test, selected_section, sub) for test in tests])
             
-            elif parts[2] == "single":
-                # Sirf current subsection ke tests
+            elif parts[2] == "single": # Download all tests in the selected subsection
                 selected_subsection = context.user_data.get('selected_subsection')
                 if not selected_subsection:
                     await context.bot.send_message(user_chat_id, "Error: Subsection data nahi mila. /start se dobara search karein.")
-                    return
-                tests = context.user_data.get('last_tests', []) # Jo pehle hi fetch ho chuke hain
-                tests_to_process.extend([(test, selected_section, selected_subsection) for test in tests])
+                    return ConversationHandler.END
+                bulk_level_name = selected_subsection.get('name', 'Subsection')
+                # Use the already fetched list if available
+                tests = context.user_data.get('last_tests') 
+                # last_tests now contains dicts with 'test_data', 'section_context', 'subsection_context'
+                # Filter just the tests belonging to the selected subsection
+                if tests:
+                    tests_from_subsection = [
+                        t_info['test_data'] for t_info in tests 
+                        if t_info['subsection_context']['id'] == selected_subsection['id']
+                    ]
+                    tests_to_process.extend([(test, selected_section, selected_subsection) for test in tests_from_subsection])
+                else: # Fallback: fetch again if last_tests wasn't populated right
+                     tests = extractor.get_tests_in_subsection(series_details['id'], selected_section['id'], selected_subsection['id'])
+                     if tests:
+                         tests_to_process.extend([(test, selected_section, selected_subsection) for test in tests])
 
         if not tests_to_process:
-            await context.bot.send_message(user_chat_id, "Error: Download karne ke liye koi tests nahi mile.")
-            return
+            await context.bot.send_message(user_chat_id, f"Error: '{bulk_level_name}' mein download karne ke liye koi tests nahi mile.")
+            return ConversationHandler.END # End if no tests found
 
         total_tests = len(tests_to_process)
         progress_message = await context.bot.send_message(
             user_chat_id, 
-            f"✅ Setup complete. {total_tests} tests ko download kiya ja raha hai...\n"
+            f"✅ Starting bulk download for **{bulk_level_name}** ({total_tests} tests).\n"
             f"Destination: `{final_chat_id}`\n\n"
             "Rokne ke liye /stop type karein.",
             parse_mode=ParseMode.MARKDOWN
@@ -882,10 +843,10 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
         completed_tests = 0
 
         for test, sec, sub in tests_to_process:
-            # Check karein ki /stop call hua ya nahi
+            # Check for stop flag using user_chat_id as key in bot_data
             if context.bot_data.get(user_chat_id, {}).get(STOP_BULK_DOWNLOAD_FLAG, False):
-                await progress_message.edit_text(f"🛑 Bulk download ko {completed_tests}/{total_tests} tests ke baad rok diya gaya hai.")
-                break
+                await progress_message.edit_text(f"🛑 Bulk download for **{bulk_level_name}** stopped after {completed_tests}/{total_tests} tests.", parse_mode=ParseMode.MARKDOWN)
+                break # Exit the loop
                 
             completed_tests += 1
             file_name = f"{test.get('title', 'test')[:50]}.html".replace('/', '_')
@@ -903,7 +864,7 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                     series_details=series_details,
                     selected_section=sec,
                     subsection_context=sub,
-                    extractor_name=extractor_name
+                    extractor_name=extractor_name # Add extractor name here
                 )
                 
                 # 3. HTML generate karein
@@ -921,15 +882,15 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                 
                 # 5. Progress update karein
                 current_time = asyncio.get_event_loop().time()
-                # Har 5 file ya 3 second mein message update karein (Telegram limit se bachne ke liye)
+                # Har 5 file ya 3 second mein message update karein
                 if completed_tests % 5 == 0 or current_time - last_update_time > 3:
-                    last_update_time = current_time # Timer reset
+                    last_update_time = current_time 
                     progress = completed_tests / total_tests
                     bar = "🟩" * int(progress * 10) + "⬜️" * (10 - int(progress * 10))
                     
                     try:
                         await progress_message.edit_text(
-                            f"📥 Download ho raha hai...\n\n"
+                            f"📥 Downloading **{bulk_level_name}**...\n\n"
                             f"Progess: {bar} {completed_tests}/{total_tests} ({int(progress * 100)}%)\n\n"
                             f"File: `{file_name}`\n"
                             f"Destination: `{final_chat_id}`\n\n"
@@ -937,46 +898,52 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                             parse_mode=ParseMode.MARKDOWN
                         )
                     except BadRequest as e:
-                        if "message is not modified" in str(e):
-                            pass # Agar message same hai toh error ignore karein
-                        else:
-                            raise # Doosra error hai toh raise karein
+                        if "message is not modified" in str(e): pass
+                        else: raise 
                 
-                await asyncio.sleep(1) # Telegram API rate limit se bachne ke liye
+                await asyncio.sleep(1) # Rate limit avoidance
                 
             except Exception as e:
                 logger.error(f"Test {file_name} process karne mein error: {e}")
                 await context.bot.send_message(user_chat_id, f"⚠️ Test `{file_name}` ko process karne mein error aaya: {e}", parse_mode=ParseMode.MARKDOWN)
-                await asyncio.sleep(2) # Error ke baad thoda rukein
+                await asyncio.sleep(2) 
 
+        # Check if download completed without being stopped
         if not context.bot_data.get(user_chat_id, {}).get(STOP_BULK_DOWNLOAD_FLAG, False):
-            await progress_message.edit_text(f"✅ **Bulk Download Complete!**\n\n{completed_tests}/{total_tests} tests ko `{final_chat_id}` mein bhej diya gaya hai.", parse_mode=ParseMode.MARKDOWN)
+            await progress_message.edit_text(f"✅ **Bulk Download Complete!**\n\n{completed_tests}/{total_tests} tests from **{bulk_level_name}** sent to `{final_chat_id}`.", parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"Bulk download mein bada error: {e}")
         await context.bot.send_message(user_chat_id, f"❌ Bulk download fail ho gaya: {e}")
         
     finally:
-        # Stop flag clean up
+        # Clean up stop flag from bot_data
         context.bot_data.pop(user_chat_id, None)
-        # Context data clean up
+        # Clean up user_data specific to this bulk download
         context.user_data.pop('bulk_query_data', None)
         context.user_data.pop('bulk_extractor_name', None)
         context.user_data.pop('bulk_destination', None)
+        # Reset general state flags as well
+        context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
+        context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
+        context.user_data.pop(STATE_WAITING_TEST_NUM, None)
+
 
 
 @admin_required
 async def stop_bulk_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/stop command handle karta hai."""
     user_chat_id = update.effective_chat.id
+    # Check bot_data for the specific user's flag
     if user_chat_id in context.bot_data and not context.bot_data[user_chat_id].get(STOP_BULK_DOWNLOAD_FLAG, False):
         context.bot_data[user_chat_id][STOP_BULK_DOWNLOAD_FLAG] = True
         await update.message.reply_text("🛑 Stopping... Agla test complete hone ke baad bulk download ruk jayega.")
+        # Return END to potentially exit ConversationHandler if called within it
+        return ConversationHandler.END
     else:
         await update.message.reply_text("Abhi koi bulk download process active nahi hai.")
-    
-    # Conversation se bahar nikalne ke liye (agar /stop bulk conv ke dauraan kiya gaya)
-    return ConversationHandler.END
+        # Return None or appropriate state if not ending a conversation
+        return None
 
 
 # =============================================================================
@@ -985,43 +952,9 @@ async def stop_bulk_download(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def set_bot_commands(application: Application):
     """Bot ke menu commands set karta hai."""
-    owner_commands = [
-        BotCommand("start", "Bot ko start karein"),
-        BotCommand("menu", "Main menu dikhayein"),
-        BotCommand("settoken", "<token> - Testbook token set karein (Owner)"),
-        BotCommand("addadmin", "<user_id> - Naya admin add karein (Owner)"),
-        BotCommand("removeadmin", "<user_id> - Admin remove karein (Owner)"),
-        BotCommand("adminlist", "Sabhi admins ki list dekhein (Owner)"),
-        BotCommand("setchannel", "<chat_id> - Auto-forward channel set karein (Admin)"),
-        BotCommand("removechannel", "Auto-forward channel hatayein (Admin)"),
-        BotCommand("viewchannel", "Current forward channel dekhein (Admin)"),
-        BotCommand("stop", "Current bulk download ko rokein")
-    ]
-    
-    admin_commands = [
-        BotCommand("start", "Bot ko start karein"),
-        BotCommand("menu", "Main menu dikhayein"),
-        BotCommand("setchannel", "<chat_id> - Auto-forward channel set karein (Admin)"),
-        BotCommand("removechannel", "Auto-forward channel hatayein (Admin)"),
-        BotCommand("viewchannel", "Current forward channel dekhein (Admin)"),
-        BotCommand("stop", "Current bulk download ko rokein")
-    ]
-
-    try:
-        # Owner ke liye sabhi commands
-        await application.bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=BOT_OWNER_ID))
-        
-        # Admins ke liye limited commands
-        admins = load_json(ADMIN_FILE, {'admin_ids': []})
-        for admin_id in admins.get('admin_ids', []):
-            if admin_id != BOT_OWNER_ID:
-                try:
-                    await application.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
-                except Exception as e:
-                    logger.warning(f"Admin {admin_id} ke liye commands set nahi kar paya (shayad bot block hai): {e}")
-                
-    except Exception as e:
-        logger.warning(f"Bot commands set karne mein error: {e}")
+    # This function is now optional as post_init was removed due to errors
+    # If kept, it needs error handling for application.bot access
+    pass # Keeping it empty for now
 
 def main():
     """Bot ko run karta hai."""
@@ -1034,16 +967,17 @@ def main():
     if not init_extractor():
         logger.warning("Bot shuru ho raha hai, lekin Testbook Token set nahi hai. /settoken ka istemal karein.")
 
-    # --- YEH HAI FIX ---
-    # Application builder mein post_init pass karein
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(set_bot_commands).build()
-    # --- END FIX ---
+    # --- REMOVED post_init ---
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # --- END REMOVAL ---
 
-    # --- NAYA HANDLER: Bulk Download Conversation ---
+    # --- Bulk Download Conversation Handler ---
     bulk_download_conv = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(bulk_download_start, pattern="^bulk_section_"),
-            CallbackQueryHandler(bulk_download_start, pattern="^bulk_subsection_")
+            # These buttons are now shown in messages after text selection
+            CallbackQueryHandler(bulk_download_start, pattern="^bulk_section_all$"),
+            CallbackQueryHandler(bulk_download_start, pattern="^bulk_subsection_all$"),
+            CallbackQueryHandler(bulk_download_start, pattern="^bulk_subsection_single$"),
         ],
         states={
             ASK_EXTRACTOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_extractor_name)],
@@ -1051,18 +985,18 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel_bulk_conversation),
-            CommandHandler("stop", stop_bulk_download)
+            CommandHandler("stop", stop_bulk_download) # Stop can also exit the conversation
         ],
-        conversation_timeout=300, # 5 minute timeout
-        per_message=False # Performance ke liye behtar
+        conversation_timeout=300, 
+        per_message=False 
     )
     
     application.add_handler(bulk_download_conv)
-    # --- END NAYA HANDLER ---
 
-    # --- Baaki Handlers ---
+    # --- Command Handlers ---
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("menu", menu))
+    application.add_handler(CommandHandler("search", search_command)) # Added /search
     
     # Owner Commands
     application.add_handler(CommandHandler("settoken", set_token))
@@ -1074,24 +1008,22 @@ def main():
     application.add_handler(CommandHandler("setchannel", set_channel))
     application.add_handler(CommandHandler("removechannel", remove_channel))
     application.add_handler(CommandHandler("viewchannel", view_channel))
-    application.add_handler(CommandHandler("stop", stop_bulk_download)) # Conversation ke bahar bhi kaam karega
+    application.add_handler(CommandHandler("stop", stop_bulk_download)) 
 
-    # Inline Query
-    application.add_handler(InlineQueryHandler(inline_query))
+    # --- REMOVED Handlers ---
+    # application.add_handler(InlineQueryHandler(inline_query))
+    # application.add_handler(MessageHandler(filters.Regex(r'^/select_series'), series_selection_handler))
+    # application.add_handler(CallbackQueryHandler(section_callback, pattern="^section_"))
+    # application.add_handler(CallbackQueryHandler(subsection_callback, pattern="^subsection_"))
+    # application.add_handler(CallbackQueryHandler(series_callback, pattern="^back_to_series$"))
+    # application.add_handler(CallbackQueryHandler(section_nav_callback, pattern="^back_to_section$"))
+    # application.add_handler(CallbackQueryHandler(search_slug_callback, pattern="^search_slug_"))
+    # --- END REMOVED Handlers ---
     
-    # Message Handlers (Inline query se selection ke liye)
-    application.add_handler(MessageHandler(filters.Regex(r'^/select_series'), series_selection_handler))
-    
-    # Callback Handlers (Buttons ke liye)
-    application.add_handler(CallbackQueryHandler(section_callback, pattern="^section_"))
-    application.add_handler(CallbackQueryHandler(subsection_callback, pattern="^subsection_"))
-    application.add_handler(CallbackQueryHandler(series_callback, pattern="^back_to_series$"))
-    application.add_handler(CallbackQueryHandler(section_nav_callback, pattern="^back_to_section$"))
-    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"))
-    application.add_handler(CallbackQueryHandler(search_slug_callback, pattern="^search_slug_"))
+    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")) # Keep main menu callback
 
 
-    # Text handler (sabse aakhir mein)
+    # Text handler (handles number inputs based on state)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
 
     logger.info("Bot shuru ho raha hai...")
