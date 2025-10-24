@@ -5,54 +5,723 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes, 
-    ConversationHandler, MessageHandler, filters  # 'Filters' ko 'filters' se badal diya gaya hai
+    ConversationHandler, MessageHandler, filters
 )
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
 import io
 import asyncio  # Live progress bar ke liye
 import time
+from functools import wraps # Decorator ke liye zaroori
 
 from extractor import TestbookExtractor
 from html_generator import generate_html
 from config import TELEGRAM_BOT_TOKEN, BOT_OWNER_ID
 
-# ... baaki code ...
+# --- Logging Setup ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# --- Configuration & Admin Files ---
+ADMIN_FILE = 'admins.json'
+CONFIG_FILE = 'config.json'
 
 # --- State Definitions for Bulk Download ---
 ASK_EXTRACTOR_NAME, ASK_DESTINATION = range(2)
 
-# ... baaki code ...
+# --- Bot Data Stop Flag ---
+STOP_BULK_DOWNLOAD_FLAG = 'stop_bulk_download'
+
+# extractor instance ko global rakhein taaki token update ho sake
+extractor = None
+
+# =============================================================================
+# === DECORATORS & HELPER FUNCTIONS (MOVED TO TOP) ===
+# =============================================================================
+
+def load_json(filename, default_data=None):
+    """JSON file load karta hai, agar nahi hai toh banata hai."""
+    if default_data is None:
+        default_data = {}
+    try:
+        with open(filename, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        with open(filename, 'w') as f:
+            json.dump(default_data, f, indent=4)
+        return default_data
+
+def save_json(filename, data):
+    """JSON file save karta hai."""
+    with open(filename, 'w') as f:
+        json.dump(data, f, indent=4)
+
+def is_admin(user_id):
+    """Check karta hai ki user owner hai ya admin file mein hai."""
+    if user_id == BOT_OWNER_ID:
+        return True
+    admins = load_json(ADMIN_FILE, {'admin_ids': []})
+    return user_id in admins['admin_ids']
+
+def admin_required(func):
+    """
+    Decorator jo check karta hai ki user admin/owner hai ya nahi.
+    Owner, Admin commands (jaise /setchannel) bhi use kar sakta hai.
+    """
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        if not user or not is_admin(user.id):
+            await update.message.reply_text("⛔ Sorry, yeh command sirf admins ke liye hai.")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapped
+
+def owner_required(func):
+    """Decorator jo check karta hai ki user BOT_OWNER hai ya nahi."""
+    @wraps(func)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        if not user or user.id != BOT_OWNER_ID:
+            await update.message.reply_text("⛔ Sorry, yeh command sirf bot owner ke liye hai.")
+            return
+        return await func(update, context, *args, **kwargs)
+    return wrapped
+
+async def clear_previous_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """Agar pichhla message ID stored hai, toh use delete karta hai."""
+    if 'last_bot_message_id' in context.user_data:
+        try:
+            await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
+        except (BadRequest, Forbidden) as e:
+            logger.warning(f"Purana message delete nahi kar paya: {e}")
+        finally:
+            del context.user_data['last_bot_message_id']
+            
+async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Naya main menu (search bar ke saath) bhejta hai."""
+    chat_id = update.effective_chat.id
+    await clear_previous_message(context, chat_id)
+    
+    keyboard = [[InlineKeyboardButton("🔍 Search New Test", switch_inline_query_current_chat="")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message = await context.bot.send_message(
+        chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.HTML
+    )
+    context.user_data['last_bot_message_id'] = message.message_id
+
+def get_config():
+    """Config file (token/channel) load karta hai."""
+    return load_json(CONFIG_FILE, {"testbook_token": None, "forward_channel_id": None})
+
+def save_config(config_data):
+    """Config file (token/channel) save karta hai."""
+    save_json(CONFIG_FILE, config_data)
+
+def init_extractor():
+    """Extractor ko initialize ya re-initialize karta hai."""
+    global extractor
+    config = get_config()
+    token = config.get('testbook_token')
+    if token:
+        try:
+            extractor = TestbookExtractor(token)
+            logger.info("Extractor successfully initialized with token.")
+            return True
+        except Exception as e:
+            logger.error(f"Extractor initialize karne mein error: {e}")
+            extractor = None
+            return False
+    else:
+        logger.warning("Extractor initialize nahi hua: config.json mein Testbook token nahi hai.")
+        extractor = None
+        return False
+
+# =============================================================================
+# === OWNER COMMANDS ===
+# =============================================================================
+
+@owner_required
+async def set_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Owner Only) Naya Testbook token set karta hai."""
+    try:
+        new_token = context.args[0]
+        config = get_config()
+        config['testbook_token'] = new_token
+        save_config(config)
+        
+        if init_extractor():
+            await update.message.reply_text("✅ Testbook token successfully update ho gaya hai.")
+        else:
+            await update.message.reply_text("⚠️ Token save ho gaya hai, lekin extractor initialize nahi ho paya. Token galat ho sakta hai.")
+            
+    except (IndexError, ValueError):
+        await update.message.reply_text("Usage: /settoken <Naya Token Yahaan>")
+
+@owner_required
+async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Owner Only) Naya admin add karta hai."""
+    try:
+        user_id_to_add = int(context.args[0])
+        admins = load_json(ADMIN_FILE, {'admin_ids': []})
+        
+        if user_id_to_add in admins['admin_ids']:
+            await update.message.reply_text(f"⚠️ User {user_id_to_add} pehle se admin hai.")
+            return
+            
+        admins['admin_ids'].append(user_id_to_add)
+        save_json(ADMIN_FILE, admins)
+        await update.message.reply_text(f"✅ User {user_id_to_add} ko admin bana diya gaya hai.")
+        
+    except (IndexError, ValueError):
+        await update.message.reply_text("Usage: /addadmin <User ID>")
+
+@owner_required
+async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Owner Only) Admin ko remove karta hai."""
+    try:
+        user_id_to_remove = int(context.args[0])
+        admins = load_json(ADMIN_FILE, {'admin_ids': []})
+        
+        if user_id_to_remove not in admins['admin_ids']:
+            await update.message.reply_text(f"⚠️ User {user_id_to_remove} admin list mein nahi hai.")
+            return
+            
+        admins['admin_ids'].remove(user_id_to_remove)
+        save_json(ADMIN_FILE, admins)
+        await update.message.reply_text(f"✅ User {user_id_to_remove} ko admin list se hata diya gaya hai.")
+        
+    except (IndexError, ValueError):
+        await update.message.reply_text("Usage: /removeadmin <User ID>")
+
+@owner_required
+async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Owner Only) Sabhi admins ki list dikhata hai."""
+    admins = load_json(ADMIN_FILE, {'admin_ids': []})
+    admin_ids = admins.get('admin_ids', [])
+    
+    if not admin_ids:
+        await update.message.reply_text("👤 Admin list khaali hai.")
+        return
+
+    text = "👤 **Current Admins:**\n"
+    for admin_id in admin_ids:
+        text += f"- `{admin_id}`\n"
+        
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+# =============================================================================
+# === ADMIN & OWNER COMMANDS ===
+# =============================================================================
+
+@admin_required
+async def set_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin/Owner) Forwarding ke liye channel ID set karta hai."""
+    try:
+        new_channel_id = context.args[0]
+        # Check karein ki ID valid hai (yaani @username ya -100... se shuru hota hai)
+        if not (new_channel_id.startswith('@') or new_channel_id.startswith('-100')):
+            await update.message.reply_text("⚠️ Invalid Channel ID. ID `@channel_username` ya `-100...` se shuru hona chahiye.")
+            return
+
+        config = get_config()
+        config['forward_channel_id'] = new_channel_id
+        save_config(config)
+        await update.message.reply_text(f"✅ Forward channel set kar diya gaya hai: `{new_channel_id}`", parse_mode=ParseMode.MARKDOWN)
+        
+    except (IndexError, ValueError):
+        await update.message.reply_text("Usage: /setchannel <Channel ID ya @username>")
+
+@admin_required
+async def remove_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin/Owner) Forward channel ko remove karta hai."""
+    config = get_config()
+    if 'forward_channel_id' in config and config['forward_channel_id'] is not None:
+        config['forward_channel_id'] = None
+        save_config(config)
+        await update.message.reply_text("✅ Forward channel hata diya gaya hai. Files ab auto-forward nahi hongi.")
+    else:
+        await update.message.reply_text("ℹ️ Koi forward channel pehle se set nahi hai.")
+
+@admin_required
+async def view_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin/Owner) Current forward channel dikhata hai."""
+    config = get_config()
+    channel_id = config.get('forward_channel_id')
+    if channel_id:
+        await update.message.reply_text(f"ℹ️ Current forward channel hai: `{channel_id}`", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text("ℹ️ Koi forward channel set nahi hai.")
+
+# =============================================================================
+# === PUBLIC COMMANDS & BOT LOGIC ===
+# =============================================================================
+
+@admin_required
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/start command handle karta hai."""
+    user = update.effective_user
+    welcome_text = (
+        f"👋 **Welcome, {user.first_name}!**\n\n"
+        "Main Testbook Extractor Bot hoon. Main aapke liye tests extract kar sakta hoon.\n\n"
+        "Naya test search karne ke liye neeche diye gaye '🔍 Search New Test' button par click karein."
+    )
+    await send_main_menu(update, context, welcome_text)
+
+@admin_required
+async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/menu command handle karta hai."""
+    await send_main_menu(update, context, "🏠 Main Menu")
+
+@admin_required
+async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline search requests handle karta hai."""
+    if not extractor:
+        await update.inline_query.answer([], switch_pm_text="Bot initialized nahi hai (Token set karein)", switch_pm_parameter="start")
+        return
+        
+    query = update.inline_query.query
+    if not query:
+        await update.inline_query.answer([], switch_pm_text="Search karne ke liye type karein...", switch_pm_parameter="start")
+        return
+
+    try:
+        search_results = extractor.search(query)
+        results = []
+        
+        if search_results:
+            for i, series in enumerate(search_results[:20]): # Limit 20 results
+                series_id = series.get('slug')
+                series_name = series.get('name', 'Unknown Series')
+                tests_count = series.get('testsCount', 0)
+                
+                results.append(
+                    InlineQueryResultArticle(
+                        id=f"series_{series_id}_{i}",
+                        title=series_name,
+                        description=f"{tests_count} tests available",
+                        input_message_content=InputTextMessageContent(
+                            f"/select_series {series_id}", # Hum slug ka istemal karenge
+                            parse_mode=ParseMode.MARKDOWN
+                        )
+                    )
+                )
+        
+        await update.inline_query.answer(results, cache_time=5)
+
+    except Exception as e:
+        logger.error(f"Inline query mein error: {e}")
+
+@admin_required
+async def series_selection_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline query se select ki gayi series ko handle karta hai."""
+    if not extractor:
+        await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
+        return
+        
+    try:
+        series_slug = context.args[0]
+        context.user_data['current_series_slug'] = series_slug
+        
+        details = extractor.get_series_details(series_slug)
+        if not details:
+            await update.message.reply_text("Error: Is series ki details nahi mil saki.")
+            return
+
+        context.user_data['series_details'] = details
+        sections = details.get('sections', [])
+        
+        keyboard = []
+        for i, section in enumerate(sections):
+            section_name = section.get('name', 'N/A')
+            callback_data = f"section_{i}"
+            keyboard.append([InlineKeyboardButton(section_name, callback_data=callback_data)])
+        
+        # Bulk Download Button (Section Level)
+        keyboard.append([InlineKeyboardButton("📥 Download All Tests in this Series", callback_data=f"bulk_section_all")])
+        keyboard.append([InlineKeyboardButton("« Back to Main Menu", callback_data="main_menu")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await clear_previous_message(context, update.effective_chat.id)
+        message = await update.message.reply_text(
+            f"📚 **{details.get('name')}**\n\nEk section chunein:",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        context.user_data['last_bot_message_id'] = message.message_id
+        
+    except (IndexError, ValueError):
+        await update.message.reply_text("Invalid command.")
+    except Exception as e:
+        logger.error(f"Series selection mein error: {e}")
+        await update.message.reply_text("Series select karne mein error aaya.")
+
+
+@admin_required
+async def section_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Section button press handle karta hai."""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        section_index = int(query.data.split('_')[1])
+        context.user_data['current_section_index'] = section_index
+        
+        details = context.user_data.get('series_details')
+        if not details:
+            await query.edit_message_text("Session expire ho gaya hai. /start se dobara search karein.")
+            return
+
+        selected_section = details['sections'][section_index]
+        context.user_data['selected_section'] = selected_section
+        subsections = selected_section.get('subsections', [])
+        
+        keyboard = []
+        for i, sub in enumerate(subsections):
+            sub_name = sub.get('name', 'N/A')
+            callback_data = f"subsection_{i}"
+            keyboard.append([InlineKeyboardButton(sub_name, callback_data=callback_data)])
+        
+        # Bulk Download Button (Subsection Level)
+        keyboard.append([InlineKeyboardButton(f"📥 Download All in '{selected_section.get('name')}'", callback_data=f"bulk_subsection_all")])
+        keyboard.append([InlineKeyboardButton("« Back to Sections", callback_data="back_to_series")])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            f"🗂️ **{selected_section.get('name')}**\n\nEk subsection chunein:",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+    except (IndexError, ValueError, KeyError):
+        await query.edit_message_text("Error: Section data nahi mila. /start se dobara search karein.")
+        
+@admin_required
+async def subsection_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Subsection button press handle karta hai."""
+    query = update.callback_query
+    await query.answer()
+    
+    try:
+        subsection_index = int(query.data.split('_')[1])
+        context.user_data['current_subsection_index'] = subsection_index
+        
+        series_details = context.user_data.get('series_details')
+        selected_section = context.user_data.get('selected_section')
+        if not series_details or not selected_section:
+            await query.edit_message_text("Session expire ho gaya hai. /start se dobara search karein.")
+            return
+
+        selected_subsection = selected_section['subsections'][subsection_index]
+        context.user_data['selected_subsection'] = selected_subsection
+        
+        tests = extractor.get_tests_in_subsection(
+            series_details['id'], 
+            selected_section['id'], 
+            selected_subsection['id']
+        )
+        
+        if not tests:
+            await query.edit_message_text(
+                "Is subsection mein koi tests nahi mile.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Subsections", callback_data=f"back_to_section")]])
+            )
+            return
+            
+        context.user_data['last_tests'] = tests
+        
+        # Tests ko .txt file mein convert karein
+        test_list_str = ""
+        for i, test in enumerate(tests):
+            test_list_str += f"{i+1}. {test.get('title', 'N/A')}\n"
+            
+        test_list_io = io.BytesIO(test_list_str.encode('utf-8'))
+        test_list_io.name = f"{selected_subsection.get('name', 'tests')}.txt"
+        
+        keyboard = [
+            [InlineKeyboardButton(f"📥 Download All in '{selected_subsection.get('name')}'", callback_data=f"bulk_subsection_single")],
+            [InlineKeyboardButton("« Back to Subsections", callback_data="back_to_section")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Purana message delete karein (kyonki hum file bhej rahe hain)
+        await query.delete_message()
+        
+        message = await context.bot.send_document(
+            chat_id=query.effective_chat.id,
+            document=test_list_io,
+            caption=(
+                f"📂 **{selected_subsection.get('name')}**\n\n"
+                f"Is subsection mein {len(tests)} tests mile hain.\n\n"
+                "Test download karne ke liye, list se **test ka number** (jaise `5`) copy karke mujhe reply karein."
+            ),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        context.user_data['last_bot_message_id'] = message.message_id
+        
+    except (IndexError, ValueError, KeyError):
+        await query.edit_message_text("Error: Subsection data nahi mila. /start se dobara search karein.")
+
+@admin_required
+async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test number (text input) handle karta hai."""
+    if not extractor:
+        await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
+        return
+        
+    try:
+        test_index = int(update.message.text.strip()) - 1 # 1-based index ko 0-based karein
+        
+        tests = context.user_data.get('last_tests')
+        series_details = context.user_data.get('series_details')
+        selected_section = context.user_data.get('selected_section')
+        selected_subsection = context.user_data.get('selected_subsection')
+        
+        if not all([tests, series_details, selected_section, selected_subsection]):
+            await update.message.reply_text("Session expire ho gaya hai ya test list nahi mili. /start se dobara search karein.")
+            return
+
+        if 0 <= test_index < len(tests):
+            selected_test = tests[test_index]
+            await process_single_test_download(update, context, selected_test)
+        else:
+            await update.message.reply_text(f"Invalid number. Kripya 1 aur {len(tests)} ke beech ka number reply karein.")
+            
+    except (ValueError, TypeError):
+        # Agar text number nahi hai, toh use search query maanein
+        await handle_search_as_text(update, context)
+    except Exception as e:
+        logger.error(f"Text input handle karne mein error: {e}")
+        await update.message.reply_text("Test process karne mein error aaya.")
+
+async def handle_search_as_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Agar text number nahi hai, toh use search query maanta hai."""
+    if not extractor:
+        await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
+        return
+        
+    query = update.message.text
+    search_results = extractor.search(query)
+    
+    if not search_results:
+        await update.message.reply_text(f"'{query}' ke liye koi results nahi mile.")
+        return
+
+    results_text = f"🔍 **Results for '{query}'**\n\n"
+    keyboard = []
+    
+    for i, series in enumerate(search_results[:10]): # Limit 10 results for text
+        series_slug = series.get('slug')
+        series_name = series.get('name', 'Unknown Series')
+        tests_count = series.get('testsCount', 0)
+        
+        results_text += f"**{i+1}. {series_name}** ({tests_count} tests)\n"
+        keyboard.append([InlineKeyboardButton(f"{i+1}. {series_name[:30]}...", callback_data=f"search_slug_{series_slug}")])
+    
+    keyboard.append([InlineKeyboardButton("« Back to Main Menu", callback_data="main_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await clear_previous_message(context, update.effective_chat.id)
+    message = await update.message.reply_text(
+        results_text + "\nSelect a series:",
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN
+    )
+    context.user_data['last_bot_message_id'] = message.message_id
+
+@admin_required
+async def search_slug_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Text search se aaye series slug callback ko handle karta hai."""
+    query = update.callback_query
+    await query.answer()
+    
+    series_slug = query.data.split('_', 2)[2] # "search_slug_" ke baad sab kuch
+    
+    # Fake update object banayein taaki hum series_selection_handler ko call kar sakein
+    class FakeMessage:
+        async def reply_text(*args, **kwargs):
+            return await query.message.reply_text(*args, **kwargs)
+        
+    class FakeUpdate:
+        effective_chat = update.effective_chat
+        message = FakeMessage()
+
+    context.args = [series_slug]
+    await series_selection_handler(FakeUpdate(), context)
+    await query.delete_message()
+
+
+async def process_single_test_download(update: Update, context: ContextTypes.DEFAULT_TYPE, selected_test: dict):
+    """Ek single test ko download aur send karta hai."""
+    await update.message.reply_text(f"⏳ **Processing...**\n`{selected_test.get('title')}`\n\nTest extract karne mein 1-2 minute lag sakte hain...", parse_mode=ParseMode.MARKDOWN)
+    
+    try:
+        test_id = selected_test.get('id')
+        series_details = context.user_data.get('series_details')
+        selected_section = context.user_data.get('selected_section')
+        selected_subsection = context.user_data.get('selected_subsection')
+
+        questions_data = extractor.extract_questions(test_id)
+        
+        if questions_data.get('error'):
+            await update.message.reply_text(f"Error: {questions_data.get('error')}")
+            return
+            
+        # Caption generate karein
+        caption = extractor.get_caption(
+            test_summary=selected_test,
+            series_details=series_details,
+            selected_section=selected_section,
+            subsection_context=selected_subsection
+        )
+        
+        # HTML generate karein (extractor.last_details ka istemal karega)
+        html_content = generate_html(questions_data, extractor.last_details)
+        
+        html_file = io.BytesIO(html_content.encode('utf-8'))
+        file_name = f"{selected_test.get('title', 'test')[:50]}.html".replace('/', '_')
+        html_file.name = file_name
+        
+        # File ko user ko send karein
+        sent_message = await update.message.reply_document(
+            document=html_file,
+            caption=caption,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        # Auto-forward karein (agar set hai)
+        config = get_config()
+        channel_id = config.get('forward_channel_id')
+        if channel_id:
+            try:
+                await context.bot.forward_message(
+                    chat_id=channel_id,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=sent_message.message_id
+                )
+            except Exception as e:
+                logger.error(f"Channel {channel_id} mein forward karne mein error: {e}")
+                await update.message.reply_text(f"⚠️ Test send ho gaya hai, lekin channel `{channel_id}` mein forward nahi kar paya. (Error: {e})", parse_mode=ParseMode.MARKDOWN)
+
+    except Exception as e:
+        logger.error(f"Test download/send karne mein error: {e}")
+        await update.message.reply_text(f"Test process karne mein ek error aaya: {e}")
+
+
+# =============================================================================
+# === NAVIGATION CALLBACKS ===
+# =============================================================================
+
+@admin_required
+async def series_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Back to Sections' (Series detail) button handle karta hai."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Fake update object
+    class FakeMessage:
+        async def reply_text(*args, **kwargs):
+            return await query.message.edit_text(*args, **kwargs)
+    class FakeUpdate:
+        effective_chat = update.effective_chat
+        message = FakeMessage()
+
+    series_slug = context.user_data.get('current_series_slug')
+    if not series_slug:
+        await query.edit_message_text("Session expire ho gaya hai. /start se dobara search karein.")
+        return
+        
+    context.args = [series_slug]
+    await series_selection_handler(FakeUpdate(), context)
+
+@admin_required
+async def section_nav_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Back to Subsections' (Section detail) button handle karta hai."""
+    query = update.callback_query
+    await query.answer()
+    await section_callback(update, context) # Seedha section_callback call karein
+
+@admin_required
+async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Back to Main Menu' button handle karta hai."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Fake update object
+    class FakeUpdate:
+        effective_user = update.effective_user
+        effective_chat = update.effective_chat
+    
+    await send_main_menu(FakeUpdate(), context, "🏠 Main Menu")
+    await query.delete_message()
+
+
+# =============================================================================
+# === BULK DOWNLOAD CONVERSATION ===
+# =============================================================================
+
+@admin_required
+async def bulk_download_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bulk download shuru karta hai, extractor ka naam poochta hai."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Store karein ki kya download karna hai
+    context.user_data['bulk_query_data'] = query.data
+    
+    text = (
+        "📝 **Extractor ka Naam:**\n\n"
+        "Aap jo test extract kar rahe hain, unke caption mein 'Extracted By:' ke baad kya naam aana chahiye?\n\n"
+        "(Jaise: `H4R`, `Testbook Team`, etc.)\n\n"
+        "Cancel karne ke liye /cancel type karein."
+    )
+    
+    await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
+    
+    return ASK_EXTRACTOR_NAME
 
 @admin_required
 async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Extractor ka naam save karta hai aur destination poochta hai.
     """
-    extractor_name = update.message.text
-    context.user_data['extractor_name'] = extractor_name
+    extractor_name = update.message.text.strip()
+    context.user_data['bulk_extractor_name'] = extractor_name
     
-    # User ka message delete karein (naam wala)
+    # Pichhla message delete karein
+    chat_id = update.effective_chat.id
+    if 'last_bot_message_id' in context.user_data:
+         try:
+            await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
+         except Exception: pass # Fail hone par ignore karein
+            
+    # User ka message delete karein
     try:
         await update.message.delete()
-    except Exception as e:
-        logger.warning(f"User message delete nahi kar saka: {e}")
+    except Exception: pass
 
-    # Purana message clear karein (bot ka prompt wala)
-    await clear_previous_message(context)
-    
-    default_channel_id = get_config('forward_channel_id') or "N/A"
-    destination_text = (
-        f"✅ Extractor ka naam set: **{extractor_name}**\n\n"
-        "📍 **Destination Chunein:**\n"
-        "Aapko yeh sabhi files kahaan bhejni hain?\n\n"
-        f"1️⃣ Type `/d` - Default Channel mein bhejne ke liye (ID: `{default_channel_id}`)\n"
-        "2️⃣ Type `1` - Mujhe isi chat mein bhejne ke liye (Private).\n"
-        "3️⃣ Type `-100...` - Kisi naye specific Channel/Group ID mein bhejne ke liye.\n\n"
+    config = get_config()
+    default_channel = config.get('forward_channel_id', 'N/A')
+
+    text = (
+        f"➡️ **Destination Chunein:**\n\n"
+        "Aap yeh sabhi test files kahaan bhejna chahte hain?\n\n"
+        "1. **`1`** type karein - Files ko isi chat (aapki personal chat) mein bhejne ke liye.\n"
+        "2. **`/d`** type karein - Default channel (`{default_channel}`) mein bhejne ke liye.\n"
+        "3. Koi naya **Channel ID** (jaise `-100...` ya `@username`) type karein - Kisi doosre channel mein bhejne ke liye.\n\n"
         "Cancel karne ke liye /cancel type karein."
     )
     
-    message = await update.message.reply_text(destination_text, parse_mode=ParseMode.MARKDOWN)
+    message = await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     context.user_data['last_bot_message_id'] = message.message_id
 
     return ASK_DESTINATION
@@ -62,163 +731,175 @@ async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     Destination save karta hai aur bulk download shuru karta hai.
     """
-    destination_choice = update.message.text
-    context.user_data['destination_choice'] = destination_choice
+    destination_input = update.message.text.strip()
+    context.user_data['bulk_destination'] = destination_input
     
-    # User ka message delete karein (destination wala)
+    # Pichhla message delete karein
+    chat_id = update.effective_chat.id
+    if 'last_bot_message_id' in context.user_data:
+         try:
+            await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
+         except Exception: pass
+            
+    # User ka message delete karein
     try:
         await update.message.delete()
-    except Exception as e:
-        logger.warning(f"User message delete nahi kar saka: {e}")
+    except Exception: pass
         
-    # Purana message clear karein (bot ka prompt wala)
-    await clear_previous_message(context)
-    
-    # Asli bulk download function ko call karein (ab yeh naya function hai)
-    await perform_bulk_download(update, context)
+    # Async task shuru karein (taaki bot block na ho)
+    asyncio.create_task(perform_bulk_download(update, context))
     
     # Conversation khatm karein
     return ConversationHandler.END
 
 async def cancel_bulk_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Bulk download conversation ko /cancel se rokta hai.
-    """
-    await clear_previous_message(context)
-    await update.message.reply_text("Bulk download setup cancel kar diya gaya hai.")
+    """Bulk download conversation ko cancel karta hai."""
+    await clear_previous_message(context, update.effective_chat.id)
     
-    # context.user_data se temporary keys clear karein
+    await update.message.reply_text("Bulk download cancel kar diya gaya hai.")
+    
+    # Cleanup
     context.user_data.pop('bulk_query_data', None)
-    context.user_data.pop('extractor_name', None)
-    context.user_data.pop('destination_choice', None)
+    context.user_data.pop('bulk_extractor_name', None)
+    context.user_data.pop('bulk_destination', None)
     
+    await send_main_menu(update, context, "🏠 Main Menu")
     return ConversationHandler.END
 
 # --- Bulk Download Logic (Updated) ---
 async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Asli bulk download logic, ab extractor_name aur destination ke saath.
+    Asynchronously sabhi tests ko download aur forward karta hai.
     """
-    # Conversation se data retrieve karein
-    query_data = context.user_data.pop('bulk_query_data', None)
-    extractor_name = context.user_data.pop('extractor_name', None)
-    destination_choice = context.user_data.pop('destination_choice', None)
+    if not extractor:
+        await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
+        return
+        
     user_chat_id = update.effective_chat.id
-
-    if not all([query_data, extractor_name, destination_choice]):
-        await update.message.reply_text("❌ **Error:** Conversation data missing. Kripya /start se dobara shuru karein.")
-        return
-
-    # Destination ID tay karein
-    final_chat_id = None
-    if destination_choice == '1':
-        final_chat_id = user_chat_id
-    elif destination_choice == '/d':
-        final_chat_id = get_config('forward_channel_id')
-        if not final_chat_id:
-            await update.message.reply_text("❌ **Error:** Aapne default channel chuna, lekin koi default channel set nahi hai. Kripya pehle `/setchannel` ka istemal karein.")
-            return
-    else:
-        try:
-            final_chat_id = int(destination_choice)
-        except ValueError:
-            await update.message.reply_text("❌ **Error:** Invalid destination. Kripya `1`, `/d`, ya ek valid channel ID (jaise -100...) type karein.")
-            return
-
-    # User ko batayein ki process shuru ho gaya hai (sirf private chat mein)
-    progress_message = await context.bot.send_message(chat_id=user_chat_id, text=f"⚙️ Bulk download shuru ho raha hai...\nDestination: `{final_chat_id}`")
     
-    token = get_config('testbook_auth_token')
-    if not token:
-        await progress_message.edit_text("❌ Token not set. Use /settoken.")
-        return
-        
-    extractor = TestbookExtractor(token)
-    series_details = context.user_data.get('series_details')
+    # User data se context lein
+    query_data = context.user_data.get('bulk_query_data')
+    extractor_name = context.user_data.get('bulk_extractor_name')
+    destination = context.user_data.get('bulk_destination')
     
-    if not series_details:
-        await progress_message.edit_text("❌ Session expire ho gaya hai, /start se shuru karein.")
-        return
+    # Stop flag set karein
+    context.bot_data[user_chat_id] = {STOP_BULK_DOWNLOAD_FLAG: False}
 
-    # Stop flag reset karein
-    context.bot_data[user_chat_id] = {'stop_flag': False}
-    
-    total_tests = 0
-    completed_tests = 0
-    
     try:
-        tests_to_process = []
+        # 1. Destination ID set karein
+        final_chat_id = None
+        config = get_config()
         
-        if query_data.startswith("bulk_section_"):
-            _, series_idx, section_idx = query_data.split('_')
-            selected_section = series_details.get('sections', [])[int(series_idx)]
-            subsections = selected_section.get('subsections', [])
-            
-            await progress_message.edit_text(f"⏳ **{selected_section.get('name')}** ke liye tests ki jaankari ikatthi ki ja rahi hai...")
-            
-            # Pehle sabhi tests ki list jama karein
-            for sub in subsections:
-                tests = extractor.get_tests_in_subsection(series_details['id'], selected_section['id'], sub['id'])
-                if tests:
-                    tests_to_process.extend([(test, selected_section, sub) for test in tests])
-            total_tests = len(tests_to_process)
-            
-            if total_tests == 0:
-                await progress_message.edit_text("❌ Is section mein koi test nahi mila.")
+        if destination == '1':
+            final_chat_id = user_chat_id
+        elif destination == '/d':
+            final_chat_id = config.get('forward_channel_id')
+            if not final_chat_id:
+                await context.bot.send_message(user_chat_id, "Error: Aapne default channel chuna, lekin koi default channel set nahi hai. /setchannel ka istemal karein.")
                 return
+        elif destination.startswith('@') or destination.startswith('-100'):
+            final_chat_id = destination
+        else:
+            await context.bot.send_message(user_chat_id, "Error: Invalid destination input. Process cancel kar diya gaya hai.")
+            return
 
-            await progress_message.edit_text(f"📥 **{selected_section.get('name')}** ke liye {total_tests} tests download ho rahe hain...")
+        # 2. Tests ki list fetch karein
+        series_details = context.user_data.get('series_details')
+        if not series_details:
+            await context.bot.send_message(user_chat_id, "Error: Session expire ho gaya hai. /start se dobara search karein.")
+            return
 
-        elif query_data.startswith("bulk_subsection_"):
-            _, subsection_idx = query_data.split('_')
+        tests_to_process = []
+        parts = query_data.split('_') # e.g., "bulk_section_all" ya "bulk_subsection_single"
+        
+        if parts[1] == "section":
+            # Poori series ke sabhi sections ke sabhi subsections ke tests
+            for sec in series_details.get('sections', []):
+                for sub in sec.get('subsections', []):
+                    tests = extractor.get_tests_in_subsection(series_details['id'], sec['id'], sub['id'])
+                    if tests:
+                        tests_to_process.extend([(test, sec, sub) for test in tests])
+                        
+        elif parts[1] == "subsection":
             selected_section = context.user_data.get('selected_section')
-            selected_subsection = selected_section.get('subsections', [])[int(subsection_idx)]
-            
-            await progress_message.edit_text(f"⏳ **{selected_subsection.get('name')}** ke liye tests ki jaankari ikatthi ki ja rahi hai...")
-            
-            tests = extractor.get_tests_in_subsection(series_details['id'], selected_section['id'], selected_subsection['id'])
-            total_tests = len(tests) if tests else 0
-
-            if total_tests == 0:
-                await progress_message.edit_text("❌ Is subsection mein koi test nahi mila.")
+            if not selected_section:
+                await context.bot.send_message(user_chat_id, "Error: Section data nahi mila. /start se dobara search karein.")
                 return
+                
+            if parts[2] == "all":
+                # Current section ke sabhi subsections ke tests
+                for sub in selected_section.get('subsections', []):
+                    tests = extractor.get_tests_in_subsection(series_details['id'], selected_section['id'], sub['id'])
+                    if tests:
+                        tests_to_process.extend([(test, selected_section, sub) for test in tests])
+            
+            elif parts[2] == "single":
+                # Sirf current subsection ke tests
+                selected_subsection = context.user_data.get('selected_subsection')
+                if not selected_subsection:
+                    await context.bot.send_message(user_chat_id, "Error: Subsection data nahi mila. /start se dobara search karein.")
+                    return
+                tests = context.user_data.get('last_tests', []) # Jo pehle hi fetch ho chuke hain
+                tests_to_process.extend([(test, selected_section, selected_subsection) for test in tests])
 
-            tests_to_process = [(test, selected_section, selected_subsection) for test in tests]
-            await progress_message.edit_text(f"📥 **{selected_subsection.get('name')}** ke liye {total_tests} tests download ho rahe hain...")
+        if not tests_to_process:
+            await context.bot.send_message(user_chat_id, "Error: Download karne ke liye koi tests nahi mile.")
+            return
+
+        total_tests = len(tests_to_process)
+        progress_message = await context.bot.send_message(
+            user_chat_id, 
+            f"✅ Setup complete. {total_tests} tests ko download kiya ja raha hai...\n"
+            f"Destination: `{final_chat_id}`\n\n"
+            "Rokne ke liye /stop type karein.",
+            parse_mode=ParseMode.MARKDOWN
+        )
 
         # --- Asli Download Loop ---
         start_time = asyncio.get_event_loop().time()
+        completed_tests = 0
 
         for test, sec, sub in tests_to_process:
-            # Stop flag check
-            if context.bot_data[user_chat_id].get('stop_flag'):
-                await progress_message.edit_text("🛑 Bulk download roka gaya.")
+            # Check karein ki /stop call hua ya nahi
+            if context.bot_data.get(user_chat_id, {}).get(STOP_BULK_DOWNLOAD_FLAG, False):
+                await progress_message.edit_text(f"🛑 Bulk download ko {completed_tests}/{total_tests} tests ke baad rok diya gaya hai.")
                 break
-            
-            test_id = test.get('id')
-            try:
-                questions_data = extractor.extract_questions(test_id)
-                if questions_data.get('error'):
-                    logger.warning(f"Skipping test {test_id}: {questions_data.get('error')}")
-                    continue
-
-                caption = extractor.get_caption(test, series_details, sec, sub, extractor_name)
                 
+            completed_tests += 1
+            file_name = f"{test.get('title', 'test')[:50]}.html".replace('/', '_')
+
+            try:
+                # 1. Questions extract karein
+                questions_data = extractor.extract_questions(test.get('id'))
+                if questions_data.get('error'):
+                    logger.warning(f"Test {file_name} skip kiya (Error: {questions_data.get('error')})")
+                    continue
+                
+                # 2. Caption generate karein
+                caption = extractor.get_caption(
+                    test_summary=test,
+                    series_details=series_details,
+                    selected_section=sec,
+                    subsection_context=sub,
+                    extractor_name=extractor_name
+                )
+                
+                # 3. HTML generate karein
                 html_content = generate_html(questions_data, extractor.last_details)
                 html_file = io.BytesIO(html_content.encode('utf-8'))
-                file_name = f"{test.get('title', 'test').replace('/', '_')}.html"
-
+                html_file.name = file_name
+                
+                # 4. File ko destination par send karein
                 await context.bot.send_document(
                     chat_id=final_chat_id,
-                    document=InputFile(html_file, filename=file_name),
+                    document=html_file,
                     caption=caption,
                     parse_mode=ParseMode.MARKDOWN
                 )
                 
-                completed_tests += 1
-                
-                # Progress bar update (har 5 test par ya har 2 second mein)
+                # 5. Progress update karein
                 current_time = asyncio.get_event_loop().time()
+                # Har 5 file ya 2 second mein message update karein (Telegram limit se bachne ke liye)
                 if completed_tests % 5 == 0 or current_time - start_time > 2:
                     start_time = current_time # Timer reset
                     progress = completed_tests / total_tests
@@ -232,115 +913,158 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                     )
                 
                 await asyncio.sleep(1) # Telegram API rate limit se bachne ke liye
-
-            except Exception as e:
-                logger.error(f"File {test_id} bhejte waqt error (Chat ID: {final_chat_id}): {e}")
-                await context.bot.send_message(chat_id=user_chat_id, text=f"⚠️ **Error:** File `{test.get('title')}` ko Chat ID `{final_chat_id}` par nahi bhej saka. (Error: {e})\n\nAgle test par ja raha hoon...")
-                if isinstance(e, Forbidden):
-                    await context.bot.send_message(chat_id=user_chat_id, text="Bot us group/channel mein admin nahi hai ya block ho gaya hai. Process roka ja raha hai.")
-                    break # Agar permission error hai toh ruk jaayein
                 
-                await asyncio.sleep(5) # Thoda zyada rukein agar error aaye
+            except Exception as e:
+                logger.error(f"Test {file_name} process karne mein error: {e}")
+                await context.bot.send_message(user_chat_id, f"⚠️ Test `{file_name}` ko process karne mein error aaya: {e}", parse_mode=ParseMode.MARKDOWN)
+                await asyncio.sleep(2) # Error ke baad thoda rukein
 
-        # --- Download Samapt ---
-        if not context.bot_data[user_chat_id].get('stop_flag'):
-            await progress_message.edit_text(f"✅ **Bulk Download Complete!**\n\nTotal {completed_tests}/{total_tests} files ko `{final_chat_id}` par bhej diya gaya hai.")
+        if not context.bot_data.get(user_chat_id, {}).get(STOP_BULK_DOWNLOAD_FLAG, False):
+            await progress_message.edit_text(f"✅ **Bulk Download Complete!**\n\n{completed_tests}/{total_tests} tests ko `{final_chat_id}` mein bhej diya gaya hai.", parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"Bulk download mein bada error: {e}")
-        await progress_message.edit_text(f"❌ **Error:** Bulk download fail ho gaya. Details: {e}")
+        await context.bot.send_message(user_chat_id, f"❌ Bulk download fail ho gaya: {e}")
+        
     finally:
         # Stop flag clean up
         context.bot_data.pop(user_chat_id, None)
+        # Context data clean up
+        context.user_data.pop('bulk_query_data', None)
+        context.user_data.pop('bulk_extractor_name', None)
+        context.user_data.pop('bulk_destination', None)
 
 
 @admin_required
 async def stop_bulk_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    /stop command se bulk download ko rokta hai.
-    """
+    """/stop command handle karta hai."""
     user_chat_id = update.effective_chat.id
-    if user_chat_id in context.bot_data and 'stop_flag' in context.bot_data[user_chat_id]:
-        context.bot_data[user_chat_id]['stop_flag'] = True
-        await update.message.reply_text("🛑 Roka ja raha hai... Agle test ke baad process ruk jayega.")
-        
+    if user_chat_id in context.bot_data and not context.bot_data[user_chat_id].get(STOP_BULK_DOWNLOAD_FLAG, False):
+        context.bot_data[user_chat_id][STOP_BULK_DOWNLOAD_FLAG] = True
+        await update.message.reply_text("🛑 Stopping... Agla test complete hone ke baad bulk download ruk jayega.")
     else:
-        await update.message.reply_text("ℹ️ Abhi koi bulk download process nahi chal raha hai.")
+        await update.message.reply_text("Abhi koi bulk download process active nahi hai.")
     
-    # Check karein ki kya hum bulk download conversation (setup) mein hain
-    if 'bulk_query_data' in context.user_data:
-        # Yeh /stop ko conversation ka fallback banata hai
-        await update.message.reply_text("Bulk download setup bhi cancel kar diya gaya hai.")
-        context.user_data.pop('bulk_query_data', None)
-        context.user_data.pop('extractor_name', None)
-        context.user_data.pop('destination_choice', None)
-        return ConversationHandler.END # Conversation ko force-stop karein
-    
+    # Conversation se bahar nikalne ke liye (agar /stop bulk conv ke dauraan kiya gaya)
     return ConversationHandler.END
 
 
-# --- Main Function ---
+# =============================================================================
+# === MAIN FUNCTION ===
+# =============================================================================
+
+async def set_bot_commands(application: Application):
+    """Bot ke menu commands set karta hai."""
+    owner_commands = [
+        BotCommand("start", "Bot ko start karein"),
+        BotCommand("menu", "Main menu dikhayein"),
+        BotCommand("settoken", "<token> - Testbook token set karein (Owner)"),
+        BotCommand("addadmin", "<user_id> - Naya admin add karein (Owner)"),
+        BotCommand("removeadmin", "<user_id> - Admin remove karein (Owner)"),
+        BotCommand("adminlist", "Sabhi admins ki list dekhein (Owner)"),
+        BotCommand("setchannel", "<chat_id> - Auto-forward channel set karein (Admin)"),
+        BotCommand("removechannel", "Auto-forward channel hatayein (Admin)"),
+        BotCommand("viewchannel", "Current forward channel dekhein (Admin)"),
+        BotCommand("stop", "Current bulk download ko rokein")
+    ]
+    
+    admin_commands = [
+        BotCommand("start", "Bot ko start karein"),
+        BotCommand("menu", "Main menu dikhayein"),
+        BotCommand("setchannel", "<chat_id> - Auto-forward channel set karein (Admin)"),
+        BotCommand("removechannel", "Auto-forward channel hatayein (Admin)"),
+        BotCommand("viewchannel", "Current forward channel dekhein (Admin)"),
+        BotCommand("stop", "Current bulk download ko rokein")
+    ]
+
+    try:
+        # Owner ke liye sabhi commands
+        await application.bot.set_my_commands(owner_commands, scope=BotCommandScopeChat(chat_id=BOT_OWNER_ID))
+        
+        # Admins ke liye limited commands
+        admins = load_json(ADMIN_FILE, {'admin_ids': []})
+        for admin_id in admins.get('admin_ids', []):
+            if admin_id != BOT_OWNER_ID:
+                await application.bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+                
+    except Exception as e:
+        logger.warning(f"Bot commands set karne mein error (shayad bot naya hai): {e}")
+
 def main():
-    # Initial file setup
-    if not os.path.exists(ADMIN_FILE): save_admins([])
-    if not os.path.exists(CONFIG_FILE): save_config(None, None)
+    """Bot ko run karta hai."""
+    
+    # Pehli baar config files load/create karein
+    load_json(ADMIN_FILE, {'admin_ids': []})
+    load_json(CONFIG_FILE, {"testbook_token": None, "forward_channel_id": None})
+    
+    # Extractor ko initialize karein
+    if not init_extractor():
+        logger.warning("Bot shuru ho raha hai, lekin Testbook Token set nahi hai. /settoken ka istemal karein.")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Bot commands set karein
-    application.job_queue.run_once(set_bot_commands, 0)
-
-    # --- NAYA: Bulk Download Conversation Handler ---
+    # --- NAYA HANDLER: Bulk Download Conversation ---
     bulk_download_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(bulk_download_start, pattern="^bulk_section_"),
             CallbackQueryHandler(bulk_download_start, pattern="^bulk_subsection_")
         ],
         states={
-            # Yahaan 'Filters' ko 'filters' se badla gaya hai
             ASK_EXTRACTOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_extractor_name)],
             ASK_DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_destination)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_bulk_conversation),
-            CommandHandler("stop", stop_bulk_download) # Stop ko bhi fallback banayein
+            CommandHandler("stop", stop_bulk_download)
         ],
-        conversation_timeout=600 # 10 minute timeout
+        conversation_timeout=300 # 5 minute timeout
     )
     
     application.add_handler(bulk_download_conv)
     # --- END NAYA HANDLER ---
 
-    # ... baaki handlers ...
+    # --- Baaki Handlers ---
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("menu", show_menu))
-    application.add_handler(CommandHandler("stop", stop_bulk_download)) # General stop handler
+    application.add_handler(CommandHandler("menu", menu))
     
-    # Owner commands
+    # Owner Commands
     application.add_handler(CommandHandler("settoken", set_token))
-    application.add_handler(CommandHandler("setchannel", set_channel))
-    application.add_handler(CommandHandler("removechannel", remove_channel))
-    application.add_handler(CommandHandler("viewchannel", view_channel))
     application.add_handler(CommandHandler("addadmin", add_admin))
     application.add_handler(CommandHandler("removeadmin", remove_admin))
     application.add_handler(CommandHandler("adminlist", admin_list))
+    
+    # Admin Commands
+    application.add_handler(CommandHandler("setchannel", set_channel))
+    application.add_handler(CommandHandler("removechannel", remove_channel))
+    application.add_handler(CommandHandler("viewchannel", view_channel))
+    application.add_handler(CommandHandler("stop", stop_bulk_download)) # Conversation ke bahar bhi kaam karega
 
-    # Callback handlers (Bulk waale chhodkar)
-    application.add_handler(CallbackQueryHandler(search_callback, pattern="^search_"))
-    application.add_handler(CallbackQueryHandler(series_callback, pattern="^series_"))
+    # Inline Query
+    application.add_handler(InlineQueryHandler(inline_query))
+    
+    # Message Handlers (Inline query se selection ke liye)
+    application.add_handler(MessageHandler(filters.Regex(r'^/select_series'), series_selection_handler))
+    
+    # Callback Handlers (Buttons ke liye)
     application.add_handler(CallbackQueryHandler(section_callback, pattern="^section_"))
     application.add_handler(CallbackQueryHandler(subsection_callback, pattern="^subsection_"))
-    application.add_handler(CallbackQueryHandler(series_callback, pattern="^main_menu$")) # Main menu button
+    application.add_handler(CallbackQueryHandler(series_callback, pattern="^back_to_series$"))
+    application.add_handler(CallbackQueryHandler(section_nav_callback, pattern="^back_to_section$"))
+    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"))
+    application.add_handler(CallbackQueryHandler(search_slug_callback, pattern="^search_slug_"))
 
 
     # Text handler (sabse aakhir mein)
-    # Yahaan 'Filters' ko 'filters' se badla gaya hai
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
 
     logger.info("Bot shuru ho raha hai...")
+    
+    # Bot commands set karein (async)
+    application.job_queue.run_once(set_bot_commands, 0)
+    
+    # Bot ko run karein
     application.run_polling()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-
 
