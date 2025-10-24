@@ -55,10 +55,10 @@ HTML_TEMPLATE = """
         .dark-mode .prose img { border-radius: 0.5rem; }
         body { transition: background-color 0.3s, color 0.3s; }
         .hidden { display: none; }
-        .option-radio { -webkit-appearance: none; -moz-appearance: none; appearance: none; border: 2px solid var(--border-light); border-radius: 50%; width: 20px; height: 20px; cursor: pointer; transition: all 0.2s; position: relative; }
+        .option-radio { -webkit-appearance: none; -moz-appearance: none; appearance: none; border: 2px solid var(--border-light); border-radius: 50%; width: 20px; height: 20px; cursor: pointer; transi[...]
         .dark-mode .option-radio { border-color: var(--border-dark); }
         .option-radio:checked { border-color: var(--primary-color); background-color: var(--primary-color); }
-        .option-radio:checked::after { content: ''; display: block; width: 8px; height: 8px; background: white; border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+        .option-radio:checked::after { content: ''; display: block; width: 8px; height: 8px; background: white; border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, [...]
         .question-nav-btn { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 8px; font-weight: bold; transition: all 0.2s; }
         .status-not-answered { background-color: #e5e7eb; color: #374151; }
         .dark-mode .status-not-answered { background-color: #4b5563; color: #f9fafb; }
@@ -132,10 +132,10 @@ HTML_TEMPLATE = """
                     <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">_TEST_SERIES_</p>
                 </div>
                 <div class="border-t border-b border-gray-200 dark:border-gray-700 py-4 my-6 text-left space-y-3">
-                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">📖 Section:</span><span class="text-gray-600 dark:text-gray-400 text-right">_SECTION_</span></div>
-                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">🧠 Subsection:</span><span class="text-gray-600 dark:text-gray-400 text-right">_SUBSECTION_</span></div>
-                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">✅ Correct:</span><span class="text-green-500 font-bold text-right notranslate">_CORRECT_MARKS_DISPLAY_</span></div>
-                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">❌ Incorrect:</span><span class="text-red-500 font-bold text-right notranslate">_INCORRECT_MARKS_DISPLAY_</span></div>
+                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">📖 Section:</span><span class="text-gray-600 dark:text-gray-400 text-r[...]
+                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">🧠 Subsection:</span><span class="text-gray-600 dark:text-gray-400 tex[...]
+                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">✅ Correct:</span><span class="text-green-500 font-bold text-right notr[...]
+                    <div class="flex justify-between items-center"><span class="font-semibold text-gray-700 dark:text-gray-300">❌ Incorrect:</span><span class="text-red-500 font-bold text-right notr[...]
                 </div>
                 <div class="grid grid-cols-3 gap-4 text-center">
                     <div><p class="text-2xl font-bold text-indigo-500 notranslate">_QUESTIONS_</p><p class="text-xs text-gray-500 dark:text-gray-400">Questions</p></div>
@@ -144,36 +144,36 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             <div class="mt-8 space-y-4">
-                 <button onclick="startQuiz()" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition duration-300 flex items-center justify-center gap-2"><i class="fas fa-play"></i> Start Test</button>
+                 <button onclick="startQuiz()" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition duration-300 flex items-center justify-center gap-2">[...]
                  <!-- Telegram link ko hata dete hain, kyonki hum already Telegram mein hain
-                 <a href="https://t.me/+LEGNpv9ucWMyZjkx" target="_blank" class="w-full bg-sky-500 text-white py-3 rounded-lg font-semibold hover:bg-sky-600 transition duration-300 flex items-center justify-center gap-2"><i class="fab fa-telegram-plane"></i> Join Telegram Channel</a>
+                 <a href="https://t.me/+LEGNpv9ucWMyZjkx" target="_blank" class="w-full bg-sky-500 text-white py-3 rounded-lg font-semibold hover:bg-sky-600 transition duration-300 flex items-center j[...]
                  -->
             </div>
         </div>
     </div>
     <div id="quiz-screen" class="hidden">
         <header class="card sticky top-0 z-10 p-3 sm:p-4 shadow-md rounded-none flex flex-col sm:flex-row justify-between items-center gap-2">
-            <div class="text-center sm:text-left"><h1 id="quiz-title" class="text-lg sm:text-xl font-bold"></h1><div class="flex gap-4 text-xs sm:text-sm mt-1"><span><i class="fas fa-check text-green-500"></i> <span class="notranslate">_CORRECT_MARKS_DISPLAY_</span> Marks</span><span><i class="fas fa-times text-red-500"></i> <span class="notranslate">_INCORRECT_MARKS_DISPLAY_</span> Mark</span></div></div>
+            <div class="text-center sm:text-left"><h1 id="quiz-title" class="text-lg sm:text-xl font-bold"></h1><div class="flex gap-4 text-xs sm:text-sm mt-1"><span><i class="fas fa-check text-green-[...]
             <div class="flex items-center gap-2 sm:gap-4">
-                <div id="timer" class="text-base sm:text-lg font-bold bg-blue-200 dark:bg-blue-700 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg notranslate"><i class="fas fa-clock"></i> <span id="time">00:00</span></div>
-                <button id="lang-switch-btn" onclick="openLanguageModal()" class="bg-green-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg hover:bg-green-600"><i class="fas fa-language"></i></button>
+                <div id="timer" class="text-base sm:text-lg font-bold bg-blue-200 dark:bg-blue-700 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg notranslate"><i class="fas fa-clock"></i> <span id="time">00:0[...]
+                <button id="lang-switch-btn" onclick="openLanguageModal()" class="bg-green-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg hover:bg-green-600"><i class="fas fa-language"></i></bu[...]
                 <button id="theme-toggle" class="text-xl px-2"><i class="fas fa-moon"></i></button>
                 <button onclick="openQuestionNav()" class="bg-indigo-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg hover:bg-indigo-600"><i class="fas fa-th-large"></i></button>
                 <button onclick="confirmSubmission()" class="bg-red-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg hover:bg-red-600 font-semibold">Submit</button>
             </div>
         </header>
-        <main class="p-4 md:p-8 max-w-6xl mx-auto"><div class="card p-4 sm:p-6 rounded-xl shadow-lg"><div class="flex justify-between items-center border-b pb-4 mb-4 dark:border-blue-600"><h2 class="text-lg sm:text-xl font-semibold">Question <span id="question-number" class="notranslate">1</span></h2></div><div id="question-container" class="prose max-w-none mb-6"></div><div id="options-container" class="space-y-4"></div></div><footer class="mt-6 flex flex-col sm:flex-row justify-between items-center gap-4"><div class="flex gap-4 w-full sm:w-auto"><button onclick="clearResponse()" class="flex-1 sm:flex-initial bg-blue-400 text-white px-4 py-2 sm:px-6 sm:py-3 rounded-lg hover:bg-blue-800 transition font-semibold"><i class="fas fa-trash"></i> Clear</button></div><div class="flex gap-4 w-full sm:w-auto"><button onclick="markForReview()" class="flex-1 sm:flex-initial bg-purple-500 text-white px-4 py-2 sm:px-6 sm:py-3 rounded-lg hover:bg-purple-600 transition font-semibold text-xs sm:text-sm">Mark & Next</button><button onclick="saveAndNext()" class="flex-1 sm:flex-initial bg-green-500 text-white px-4 py-2 sm:px-6 sm:py-3 rounded-lg hover:bg-green-600 transition font-semibold text-xs sm:text-sm">Save & Next</button></div></footer></main>
+        <main class="p-4 md:p-8 max-w-6xl mx-auto"><div class="card p-4 sm:p-6 rounded-xl shadow-lg"><div class="flex justify-between items-center border-b pb-4 mb-4 dark:border-blue-600"><h2 class="t[...]
     </div>
     <div id="results-screen" class="hidden min-h-screen flex items-center justify-center p-4">
-        <div class="card w-full max-w-lg text-center p-6 sm:p-8 rounded-xl shadow-lg"><h1 class="text-2xl sm:text-3xl font-bold mb-4">Your Results</h1><div class="text-4xl sm:text-5xl font-bold text-indigo-600 mb-6 notranslate"><span id="final-score">0</span> / <span id="total-score">0</span></div><div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8 text-center"><div><p class="text-2xl sm:text-3xl font-bold text-green-500 notranslate" id="correct-count">0</p><p class="text-xs sm:text-sm text-blue-200 dark:text-blue-600">Correct</p></div><div><p class="text-2xl sm:text-3xl font-bold text-red-500 notranslate" id="incorrect-count">0</p><p class="text-xs sm:text-sm text-blue-200 dark:text-blue-600">Incorrect</p></div><div><p class="text-2xl sm:text-3xl font-bold text-blue-500 notranslate" id="unanswered-count">0</p><p class="text-xs sm:text-sm text-blue-200 dark:text-blue-600">Unanswered</p></div><div><p class="text-2xl sm:text-3xl font-bold text-purple-500 notranslate" id="marked-count-result">0</p><p class="text-xs sm:text-sm text-blue-200 dark:text-blue-600">Marked</p></div></div><div class="flex flex-col sm:flex-row gap-4"><button onclick="reviewAnswers()" class="flex-1 bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition"><i class="fas fa-eye"></i> Review Answers</button><button onclick="restartQuiz()" class="flex-1 bg-blue-200 dark:bg-blue-600 py-3 rounded-lg font-semibold hover:bg-blue-300 dark:hover:bg-blue-700 transition">Close</button></div></div>
+        <div class="card w-full max-w-lg text-center p-6 sm:p-8 rounded-xl shadow-lg"><h1 class="text-2xl sm:text-3xl font-bold mb-4">Your Results</h1><div class="text-4xl sm:text-5xl font-bold text-i[...]
     </div>
     <div id="review-screen" class="hidden p-4 md:p-8 max-w-7xl mx-auto">
-        <header class="card sticky top-0 z-10 p-3 sm:p-4 shadow-md flex justify-between items-center mb-8"><div id="review-question-counter" class="text-lg sm:text-xl font-bold"></div><div class="flex items-center gap-2 sm:gap-4">
-        <button id="review-lang-switch-btn" onclick="openLanguageModal()" class="bg-green-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg hover:bg-green-600"><i class="fas fa-language"></i></button>
-        <button id="review-theme-toggle" class="text-xl px-2"><i class="fas fa-moon"></i></button><button onclick="backToResults()" class="bg-indigo-600 text-white px-4 py-2 sm:px-5 sm:py-2.5 rounded-lg hover:bg-indigo-700 font-semibold">Back</button></div></header><div class="flex flex-col lg:flex-row gap-8"><div class="w-full lg:w-3/4"><div id="review-container"></div><footer class="mt-8 flex justify-between items-center"><button id="prev-review-btn" onclick="prevReviewQuestion()" class="bg-indigo-500 text-white px-4 py-2 sm:px-6 sm:py-3 rounded-lg hover:bg-indigo-600 transition font-semibold flex items-center gap-2 disabled:opacity-50"><i class="fas fa-chevron-left"></i> Previous</button><button id="next-review-btn" onclick="nextReviewQuestion()" class="bg-indigo-500 text-white px-4 py-2 sm:px-6 sm:py-3 rounded-lg hover:bg-indigo-6D00 transition font-semibold flex items-center gap-2 disabled:opacity-50">Next <i class="fas fa-chevron-right"></i></button></footer></div><aside class="w-full lg:w-1/4"><div class="card p-4 rounded-xl shadow-lg"><h3 class="font-bold mb-4">Question Palette</h3><div id="review-palette-grid" class="grid grid-cols-5 sm:grid-cols-6 md:grid-cols-4 lg:grid-cols-5 gap-2"></div><div class="mt-4 space-y-2 text-xs"><div class="flex items-center gap-2"><div class="w-4 h-4 rounded-sm review-status-correct"></div> Correct</div><div class="flex items-center gap-2"><div class="w-4 h-4 rounded-sm review-status-incorrect"></div> Incorrect</div><div class="flex items-center gap-2"><div class="w-4 h-4 rounded-sm review-status-unanswered"></div> Unanswered</div><div class="flex items-center gap-2"><div class="w-4 h-4 rounded-sm review-status-marked"></div> Marked</div></div></div></aside></div>
+        <header class="card sticky top-0 z-10 p-3 sm:p-4 shadow-md flex justify-between items-center mb-8"><div id="review-question-counter" class="text-lg sm:text-xl font-bold"></div><div class="flex[...]
+        <button id="review-lang-switch-btn" onclick="openLanguageModal()" class="bg-green-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg hover:bg-green-600"><i class="fas fa-language"></i></but[...]
+        <button id="review-theme-toggle" class="text-xl px-2"><i class="fas fa-moon"></i></button><button onclick="backToResults()" class="bg-indigo-600 text-white px-4 py-2 sm:px-5 sm:py-2.5 rounded-[...]
     </div>
-    <div id="question-nav-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="modal-content w-full max-w-2xl p-4 sm:p-6 rounded-xl shadow-lg"><div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-bold">Questions</h2><button onclick="closeQuestionNav()" class="text-2xl">&times;</button></div><div class="flex flex-wrap gap-4 items-center mb-4 text-xs"><div class="flex items-center gap-2"><div class="w-4 h-4 rounded-full bg-green-500"></div>Answered</div><div class="flex items-center gap-2"><div class="w-4 h-4 rounded-full bg-blue-300 dark:bg-blue-600"></div>Not Answered</div><div class="flex items-center gap-2"><div class="w-4 h-4 rounded-full bg-purple-500"></div>Marked</div><div class="flex items-center gap-2"><div class="w-4 h-4 rounded-full border-2 border-indigo-600"></div>Current</div></div><div id="question-grid" class="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-3"></div></div></div>
-    <div id="confirm-submit-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="modal-content w-full max-w-md text-center p-6 sm:p-8 rounded-xl shadow-lg"><h2 class="text-2xl font-bold mb-4">H4R Test</h2><p class="mb-6">You have <span id="unanswered-modal-count" class="font-bold">0</span> unanswered questions. Are you sure you want to submit?</p><div class="flex gap-4"><button onclick="closeConfirmSubmission()" class="flex-1 bg-blue-200 dark:bg-blue-600 py-3 rounded-lg font-semibold hover:bg-blue-300 dark:hover:bg-blue-700 transition">CANCEL</button><button onclick="submitQuiz()" class="flex-1 bg-red-500 text-white py-3 rounded-lg font-semibold hover:bg-red-600 transition">OK</button></div></div></div>
+    <div id="question-nav-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="modal-content w-full max-w-2xl p-4 sm:p-6 rounded-xl shadow-l[...]
+    <div id="confirm-submit-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="modal-content w-full max-w-md text-center p-6 sm:p-8 rounde[...]
     <div id="language-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div class="modal-content w-full max-w-xs p-4 sm:p-6 rounded-xl shadow-lg">
             <div class="flex justify-between items-center mb-4">
@@ -333,7 +333,7 @@ HTML_TEMPLATE = """
                 questionOptions.forEach((option, i) => { 
                     const isSelected = userAnswers[index] === i; 
                     const optionId = `option-${index}-${i}`; 
-                    const optionHTML = `<label for="${optionId}" class="flex items-start sm:items-center gap-4 p-4 border rounded-lg cursor-pointer transition hover:border-indigo-500 dark:border-blue-600 dark:hover:border-indigo-500 ${isSelected ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-900/50' : ''}"><input type="radio" id="${optionId}" name="option" value="${i}" class="option-radio mt-1 sm:mt-0" onchange="selectOption(${i})" ${isSelected ? 'checked' : ''}><div class="prose max-w-none flex-1 overflow-x-auto">${decodeHtml(option.text)}</div></label>`; 
+                    const optionHTML = `<label for="${optionId}" class="flex items-start sm:items-center gap-4 p-4 border rounded-lg cursor-pointer transition hover:border-indigo-500 dark:border-blue-[...]
                     optionsContainer.insertAdjacentHTML('beforeend', optionHTML); 
                 });
             } else {
@@ -466,7 +466,7 @@ HTML_TEMPLATE = """
                         optionClass = 'bg-red-100 dark:bg-red-900/50 border-red-500'; 
                         icon = '<i class="fas fa-times-circle text-red-600"></i>'; 
                     } 
-                const reviewCard = `<div class="card p-4 sm:p-6 rounded-xl shadow-md"><p class="font-semibold mb-2">Question <span class="notranslate">${index + 1}</span></p><div class="prose max-w-none mb-4 overflow-x-auto">${decodeHtml(q_content || "Question text not available.")}</div><div class="space-y-3 mb-4">${optionsHTML}</div><div class="mt-4 p-4 bg-gray-100 dark:bg-gray-800 rounded-lg border-t-4 border-green-500"><h4 class="font-bold mb-2 text-green-700 dark:text-green-400">Solution</h4><div class="prose max-w-none force-black-text overflow-x-auto">${decodeHtml(q_solution || "Solution not available.")}</div></div>
+                const reviewCard = `<div class="card p-4 sm:p-6 rounded-xl shadow-md"><p class="font-semibold mb-2">Question <span class="notranslate">${index + 1}</span></p><div class="prose max-w-no[...]
                 
                 <!-- AI Explanation feature yahan se hata diya gaya hai -->
                 
@@ -500,7 +500,7 @@ HTML_TEMPLATE = """
                 const checkOptions = getCheckOptions(q);
                 const isCorrect = userAnswer !== null && checkOptions && checkOptions[userAnswer] && checkOptions[userAnswer].is_correct; 
                 const status = questionStatus[i]; 
-                if (isCorrect) { btn.classList.add('review-status-correct'); } else if (userAnswer !== null && !isCorrect) { btn.classList.add('review-status-incorrect'); } else if (status === 'marked') { btn.classList.add('review-status-marked'); } else { btn.classList.add('review-status-unanswered'); } 
+                if (isCorrect) { btn.classList.add('review-status-correct'); } else if (userAnswer !== null && !isCorrect) { btn.classList.add('review-status-incorrect'); } else if (status === 'marked[...]
                 btn.onclick = () => jumpToReviewQuestion(i); 
                 paletteGrid.appendChild(btn); 
             }); 
@@ -518,7 +518,7 @@ HTML_TEMPLATE = """
         
         // --- QUESTION NAV MODAL ---
         function openQuestionNav() { 
-            const grid = document.getElementById('question-grid'); grid.innerHTML = ''; quizData.questions.forEach((_, i) => { let statusClass = 'status-not-answered'; if (questionStatus[i] === 'answered') statusClass = 'status-answered'; if (questionStatus[i] === 'marked') statusClass = 'status-marked'; const isCurrent = i === currentQuestionIndex ? 'status-current' : ''; const btn = document.createElement('button'); btn.textContent = i + 1; btn.className = `question-nav-btn ${statusClass} ${isCurrent} notranslate`; btn.onclick = () => { if (userAnswers[currentQuestionIndex] !== null && questionStatus[currentQuestionIndex] !== 'marked') { questionStatus[currentQuestionIndex] = 'answered'; } else if (questionStatus[currentQuestionIndex] !== 'marked') { questionStatus[currentQuestionIndex] = 'not-answered'; } loadQuestion(i); closeQuestionNav(); }; grid.appendChild(btn); }); document.getElementById('question-nav-modal').classList.remove('hidden'); 
+            const grid = document.getElementById('question-grid'); grid.innerHTML = ''; quizData.questions.forEach((_, i) => { let statusClass = 'status-not-answered'; if (questionStatus[i] === 'answe[...]
         }
         function closeQuestionNav() { document.getElementById('question-nav-modal').classList.add('hidden'); }
         
@@ -559,7 +559,7 @@ HTML_TEMPLATE = """
                 console.error("Initialization Error:", e); 
                 const welcomeContent = document.querySelector('#welcome-screen .card'); 
                 if(welcomeContent){ 
-                    welcomeContent.innerHTML = `<div class="text-center"><h1 class="text-2xl font-bold text-red-600">Error</h1><p class="mt-4">Is file mein quiz data nahi mil saka ya format galat hai. ${e.message}</p></div>`; 
+                    welcomeContent.innerHTML = `<div class="text-center"><h1 class="text-2xl font-bold text-red-600">Error</h1><p class="mt-4">Is file mein quiz data nahi mil saka ya format galat hai.[...]
                 } 
             } 
         });
@@ -572,8 +572,14 @@ def generate_html(quiz_data: dict, details: dict) -> str:
     """
     JSON data aur test details se ek complete HTML string generate karta hai.
     """
+    # Dump quiz_data to JSON (keeps unicode - ensure_ascii=False)
     processed_content_str = json.dumps(quiz_data, ensure_ascii=False)
-    
+
+    # IMPORTANT: escape any closing </script> sequences inside the injected JSON
+    # Otherwise a question/option text containing "</script>" will prematurely
+    # close the outer <script> block and break the page (functions won't be defined).
+    processed_content_str = processed_content_str.replace("</script>", "<\\/script>")
+
     final_html = HTML_TEMPLATE.replace('/* QUIZ_DATA_PLACEHOLDER */', processed_content_str)
 
     duration_in_seconds = 1800  # Default 30 minutes
@@ -614,4 +620,3 @@ def generate_html(quiz_data: dict, details: dict) -> str:
         final_html = final_html.replace(placeholder, str(value))
 
     return final_html
-
