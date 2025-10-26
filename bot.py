@@ -987,7 +987,7 @@ def main():
             CommandHandler("cancel", cancel_bulk_conversation),
             CommandHandler("stop", stop_bulk_download) # Stop can also exit the conversation
         ],
-        conversation_timeout=300, 
+        conversation_timeout=600, 
         per_message=False 
     )
     
@@ -1033,4 +1033,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
