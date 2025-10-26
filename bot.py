@@ -36,7 +36,8 @@ STATE_WAITING_SECTION_NUM = 'awaiting_section_num'
 STATE_WAITING_TEST_NUM = 'awaiting_test_num' # After txt file
 
 # --- State Definitions for Bulk Download ---
-ASK_EXTRACTOR_NAME, ASK_DESTINATION = range(2)
+# --- MODIFIED: Naya state add kiya ---
+ASK_EXTRACTOR_NAME, ASK_START_NUMBER, ASK_DESTINATION = range(3)
 
 # --- Bot Data Stop Flag ---
 STOP_BULK_DOWNLOAD_FLAG = 'stop_bulk_download'
@@ -619,24 +620,26 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # =============================================================================
 # === BULK DOWNLOAD CONVERSATION ===
 # =============================================================================
-# This part remains largely the same, but the entry point pattern needs checking.
-# Let's keep the CallbackQueryHandler entry points for now, they are attached to messages
-# sent after text-based selection.
+# This part is MODIFIED to include the ASK_START_NUMBER state.
 
 @admin_required
 async def bulk_download_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Bulk download shuru karta hai, extractor ka naam poochta hai."""
+    """
+    Bulk download shuru karta hai, STARTING NUMBER poochta hai.
+    (MODIFIED)
+    """
     query = update.callback_query
     await query.answer()
     
     # Store karein ki kya download karna hai
     context.user_data['bulk_query_data'] = query.data
     
+    # --- MODIFIED: Ab extractor name nahi, start number poochhein ---
     text = (
-        "📝 **Extractor ka Naam:**\n\n"
-        "Aap jo test extract kar rahe hain, unke caption mein 'Extracted By:' ke baad kya naam aana chahiye?\n\n"
-        "(Jaise: `H4R`, `Testbook Team`, etc.)\n\n"
-        "Cancel karne ke liye /cancel type karein."
+        f"🔢 **Kahaan se Shuru Karein?**\n\n"
+        "Kripya test ka starting number type karein (jaise list mein 5 number se shuru karne ke liye `5` type karein).\n\n"
+        "Shuru se (number 1 se) start karne ke liye `1` type karein."
+        "\n\nCancel karne ke liye /cancel type karein."
     )
     
     # Edit the message containing the button
@@ -649,12 +652,57 @@ async def bulk_download_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
          logger.error(f"Bulk start edit error: {e}")
 
+    return ASK_START_NUMBER # --- MODIFIED: Naya state return karein ---
+
+@admin_required
+async def receive_start_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    (NEW FUNCTION) Start number save karta hai aur extractor ka naam poochta hai.
+    """
+    chat_id = update.effective_chat.id
+    try:
+        # User-facing number 1-based hai
+        start_number = int(update.message.text.strip())
+        if start_number < 1:
+            start_number = 1 # Force start from 1 if user enters 0 or negative
+    except ValueError:
+        await update.message.reply_text("Invalid number. '1' se start kar raha hoon.")
+        start_number = 1
+    
+    # 1-based start number store karein
+    context.user_data['bulk_start_number'] = start_number 
+
+    # "Start Number" prompt ko delete karein
+    if 'last_bot_message_id' in context.user_data:
+        try:
+            await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
+        except Exception: pass
+            
+    # User ka message (number) delete karein
+    try:
+        await update.message.delete()
+    except Exception: pass
+
+    # --- Ab extractor name poochhein ---
+    text = (
+        "📝 **Extractor ka Naam:**\n\n"
+        "Aap jo test extract kar rahe hain, unke caption mein 'Extracted By:' ke baad kya naam aana chahiye?\n\n"
+        "(Jaise: `H4R`, `Testbook Team`, etc.)\n\n"
+        "Cancel karne ke liye /cancel type karein."
+    )
+    
+    # Send the new prompt
+    message = await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+    context.user_data['last_bot_message_id'] = message.message_id # Store ID for the next step
+
     return ASK_EXTRACTOR_NAME
+
 
 @admin_required
 async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Extractor ka naam save karta hai aur destination poochta hai.
+    (MODIFIED: Sirf return value change hua)
     """
     extractor_name = update.message.text.strip()
     context.user_data['bulk_extractor_name'] = extractor_name
@@ -695,6 +743,7 @@ async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_T
 async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Destination save karta hai aur bulk download shuru karta hai.
+    (No changes needed)
     """
     destination_input = update.message.text.strip()
     context.user_data['bulk_destination'] = destination_input
@@ -720,7 +769,10 @@ async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 async def cancel_bulk_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Bulk download conversation ko cancel karta hai."""
+    """
+    Bulk download conversation ko cancel karta hai.
+    (MODIFIED: Naya state clean karein)
+    """
     await clear_previous_message(context, update.effective_chat.id)
     
     # Send cancellation message if triggered by command
@@ -730,16 +782,18 @@ async def cancel_bulk_conversation(update: Update, context: ContextTypes.DEFAULT
     # Cleanup user data specific to bulk download
     context.user_data.pop('bulk_query_data', None)
     context.user_data.pop('bulk_extractor_name', None)
+    context.user_data.pop('bulk_start_number', None) # --- ADDED ---
     context.user_data.pop('bulk_destination', None)
     
     # Send main menu again
     await send_main_menu(update, context, "🏠 Main Menu")
     return ConversationHandler.END
 
-# --- Bulk Download Logic (Unchanged from previous version) ---
+# --- Bulk Download Logic (MODIFIED) ---
 async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Asynchronously sabhi tests ko download aur forward karta hai.
+    (MODIFIED: Start number ka istemal karega)
     """
     if not extractor:
         await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
@@ -747,10 +801,15 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
         
     user_chat_id = update.effective_chat.id
     
-    # User data se context lein
+    # --- MODIFIED: Start number lein ---
     query_data = context.user_data.get('bulk_query_data')
     extractor_name = context.user_data.get('bulk_extractor_name')
     destination = context.user_data.get('bulk_destination')
+    
+    # 1-based start number lein, default 1
+    start_from_number = context.user_data.get('bulk_start_number', 1) 
+    # Slicing ke liye 0-based index banayein
+    start_index = max(0, start_from_number - 1)
     
     # Stop flag set karein in bot_data using user_chat_id as key
     context.bot_data[user_chat_id] = {STOP_BULK_DOWNLOAD_FLAG: False}
@@ -829,27 +888,45 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.send_message(user_chat_id, f"Error: '{bulk_level_name}' mein download karne ke liye koi tests nahi mile.")
             return ConversationHandler.END # End if no tests found
 
-        total_tests = len(tests_to_process)
+        # --- MODIFIED: List ko slice karein aur message update karein ---
+        original_total = len(tests_to_process)
+        if start_index > 0:
+            if start_index >= original_total:
+                await context.bot.send_message(user_chat_id, f"Error: Aapne {start_from_number} se start karne ko kaha, lekin total {original_total} tests hi hain. Process cancel kar diya gaya hai.")
+                return ConversationHandler.END
+            
+            # List ko slice karein
+            tests_to_process = tests_to_process[start_index:]
+            
+        total_tests_in_batch = len(tests_to_process) # Yeh naya total hai jo process hoga
+        # --- End Naya Code ---
+
         progress_message = await context.bot.send_message(
             user_chat_id, 
-            f"✅ Starting bulk download for **{bulk_level_name}** ({total_tests} tests).\n"
+            f"✅ Starting bulk download for **{bulk_level_name}** ({total_tests_in_batch} tests).\n"
+            f"(Starting from number {start_from_number} of {original_total} total)\n" # User ko batayein
             f"Destination: `{final_chat_id}`\n\n"
             "Rokne ke liye /stop type karein.",
             parse_mode=ParseMode.MARKDOWN
         )
 
-        # --- Asli Download Loop ---
+        # --- Asli Download Loop (MODIFIED) ---
         last_update_time = asyncio.get_event_loop().time()
-        completed_tests = 0
+        completed_in_this_batch = 0 # Variable ka naam badal diya
 
         for test, sec, sub in tests_to_process:
             # Check for stop flag using user_chat_id as key in bot_data
             if context.bot_data.get(user_chat_id, {}).get(STOP_BULK_DOWNLOAD_FLAG, False):
-                await progress_message.edit_text(f"🛑 Bulk download for **{bulk_level_name}** stopped after {completed_tests}/{total_tests} tests.", parse_mode=ParseMode.MARKDOWN)
+                await progress_message.edit_text(f"🛑 Bulk download for **{bulk_level_name}** stopped after {completed_in_this_batch}/{total_tests_in_batch} tests.", parse_mode=ParseMode.MARKDOWN)
                 break # Exit the loop
                 
-            completed_tests += 1
-            file_name = f"{test.get('title', 'test')[:50]}.html".replace('/', '_')
+            completed_in_this_batch += 1
+            # Asli test number (original list ke hisab se)
+            actual_test_number = start_index + completed_in_this_batch 
+            
+            # File name mein asli number add karein
+            file_name = f"{actual_test_number}. {test.get('title', 'test')[:50]}.html".replace('/', '_')
+
 
             try:
                 # 1. Questions extract karein
@@ -880,18 +957,19 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                     parse_mode=ParseMode.MARKDOWN
                 )
                 
-                # 5. Progress update karein
+                # 5. Progress update karein (MODIFIED)
                 current_time = asyncio.get_event_loop().time()
                 # Har 5 file ya 3 second mein message update karein
-                if completed_tests % 5 == 0 or current_time - last_update_time > 3:
+                if completed_in_this_batch % 5 == 0 or current_time - last_update_time > 3:
                     last_update_time = current_time 
-                    progress = completed_tests / total_tests
+                    progress = completed_in_this_batch / total_tests_in_batch
                     bar = "🟩" * int(progress * 10) + "⬜️" * (10 - int(progress * 10))
                     
                     try:
                         await progress_message.edit_text(
                             f"📥 Downloading **{bulk_level_name}**...\n\n"
-                            f"Progess: {bar} {completed_tests}/{total_tests} ({int(progress * 100)}%)\n\n"
+                            f"Progess: {bar} {completed_in_this_batch}/{total_tests_in_batch} ({int(progress * 100)}%)\n"
+                            f"(Overall Test {actual_test_number}/{original_total})\n\n"
                             f"File: `{file_name}`\n"
                             f"Destination: `{final_chat_id}`\n\n"
                             "Rokne ke liye /stop type karein.",
@@ -908,9 +986,10 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                 await context.bot.send_message(user_chat_id, f"⚠️ Test `{file_name}` ko process karne mein error aaya: {e}", parse_mode=ParseMode.MARKDOWN)
                 await asyncio.sleep(2) 
 
-        # Check if download completed without being stopped
+        # Check if download completed without being stopped (MODIFIED)
         if not context.bot_data.get(user_chat_id, {}).get(STOP_BULK_DOWNLOAD_FLAG, False):
-            await progress_message.edit_text(f"✅ **Bulk Download Complete!**\n\n{completed_tests}/{total_tests} tests from **{bulk_level_name}** sent to `{final_chat_id}`.", parse_mode=ParseMode.MARKDOWN)
+            actual_test_number = start_index + completed_in_this_batch
+            await progress_message.edit_text(f"✅ **Bulk Download Complete!**\n\n{completed_in_this_batch}/{total_tests_in_batch} tests (from {start_from_number} to {actual_test_number}) from **{bulk_level_name}** sent to `{final_chat_id}`.", parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"Bulk download mein bada error: {e}")
@@ -919,9 +998,10 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
     finally:
         # Clean up stop flag from bot_data
         context.bot_data.pop(user_chat_id, None)
-        # Clean up user_data specific to this bulk download
+        # Clean up user_data specific to this bulk download (MODIFIED)
         context.user_data.pop('bulk_query_data', None)
         context.user_data.pop('bulk_extractor_name', None)
+        context.user_data.pop('bulk_start_number', None) # --- ADDED ---
         context.user_data.pop('bulk_destination', None)
         # Reset general state flags as well
         context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
@@ -971,7 +1051,7 @@ def main():
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     # --- END REMOVAL ---
 
-    # --- Bulk Download Conversation Handler ---
+    # --- Bulk Download Conversation Handler (MODIFIED) ---
     bulk_download_conv = ConversationHandler(
         entry_points=[
             # These buttons are now shown in messages after text selection
@@ -980,6 +1060,8 @@ def main():
             CallbackQueryHandler(bulk_download_start, pattern="^bulk_subsection_single$"),
         ],
         states={
+            # --- MODIFIED: Naye states add kiye ---
+            ASK_START_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_start_number)],
             ASK_EXTRACTOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_extractor_name)],
             ASK_DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_destination)],
         },
@@ -987,7 +1069,7 @@ def main():
             CommandHandler("cancel", cancel_bulk_conversation),
             CommandHandler("stop", stop_bulk_download) # Stop can also exit the conversation
         ],
-        conversation_timeout=600, 
+        conversation_timeout=600, # --- Timeout 600 seconds (10 min) kar diya ---
         per_message=False 
     )
     
@@ -1033,5 +1115,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
