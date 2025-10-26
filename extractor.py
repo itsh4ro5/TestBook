@@ -36,7 +36,7 @@ class TestbookExtractor:
             'Authorization': f"Bearer {self.token}" # Header mein token set karein
         }
 
-    def _make_request(self, url: str, params: dict = None, method: str = 'GET', payload: dict = None, timeout: int = 30):
+    def _make_request(self, url: str, params: dict = None, method: str = 'GET', payload: dict = None, timeout: int = 60):
         """Synchronous request method"""
         try:
             # Har request ke liye headers copy karein (kyonki self.token static hai)
@@ -267,4 +267,5 @@ class TestbookExtractor:
             caption += f"\n---\n*Extracted By: {extractor_name}*"
 
         return caption
+
 
