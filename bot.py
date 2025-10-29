@@ -590,7 +590,7 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 # --- BUTTONS HATA DIYE GAYE ---
                 # keyboard = [
                 #     [InlineKeyboardButton("HTML only", callback_data="format_html")],
-                    [InlineKeyboardButton("TXT only", callback_data="format_txt")],
+                #     [InlineKeyboardButton("TXT only", callback_data="format_txt")],
                 #     [InlineKeyboardButton("Both (HTML & TXT)", callback_data="format_both")]
                 # ]
                 # reply_markup = InlineKeyboardMarkup(keyboard)
@@ -648,71 +648,6 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # --- YEH FUNCTION AB ISTEMAL NAHI HOGA ---
 # @admin_required
 # async def handle_single_format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    query = update.callback_query
-    await query.answer()
-    
-    file_format = query.data.split('_')[1] # 'html', 'txt', ya 'both'
-    
-    # Stored test info fetch karein
-    selected_test_info = context.user_data.get('single_test_info')
-    
-    if not selected_test_info:
-        await query.edit_message_text("Error: Session expire ho gaya hai. Kripya /search se dobara shuru karein.")
-        return
-
-    # Format selection wale message ko delete karein
-    try:
-        await query.delete_message()
-    except Exception: pass
-    
-    # last_bot_message_id ko None set karein (kyonki format msg delete ho gaya hai)
-    # Taaki agla message (test list) clear na ho
-    context.user_data.pop('last_bot_message_id', None)
-
-    # Download process ko call karein (ab naye message ke roop mein)
-    await process_single_test_download(
-        query.message, # Message object pass karein taaki reply kar sake
-        context,
-        selected_test_info['test_data'],
-        selected_test_info['section_context'],
-        selected_test_info['subsection_context'],
-        file_format # Naya parameter
-    )
-    
-    # Test list ko dobara bhej dein taaki user agla test select kar sake
-    # (Yeh user experience behtar banata hai)
-    try:
-        combined_tests = context.user_data.get('last_tests')
-        selected_section = context.user_data.get('selected_section')
-        
-        if combined_tests and selected_section:
-            # Puraani list ko regenerate/resend karein
-            combined_test_list_str = ""
-            for i, test_info in enumerate(combined_tests):
-                # We need to recreate the list text
-                if i == 0 or test_info['subsection_context']['id'] != combined_tests[i-1]['subsection_context']['id']:
-                     combined_test_list_str += f"\n--- {test_info['subsection_context'].get('name', 'Subsection')} ---\n"
-                combined_test_list_str += f"{i+1}. {test_info['test_data'].get('title', 'N/A')}\n"
-
-            test_list_io = io.BytesIO(combined_test_list_str.encode('utf-8'))
-            test_list_io.name = f"{selected_section.get('name', 'section_tests')}.txt"
-            
-            keyboard = [[InlineKeyboardButton(f"📥 Download All in '{selected_section.get('name')}'", callback_data=f"bulk_subsection_all")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            message = await context.bot.send_document(
-                chat_id=query.effective_chat.id,
-                document=test_list_io,
-                caption=(
-                    f"📂 **{selected_section.get('name')}** (Downloaded)\n\n"
-                    "Test download ho gaya hai. Agla test download karne ke liye list se **number** reply karein."
-                ),
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            context.user_data['last_bot_message_id'] = message.message_id
-        else:
 #     """
 #     Jab user single test ke liye format (HTML/TXT/Both) chunta hai.
 #     """
