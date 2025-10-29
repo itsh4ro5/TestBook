@@ -35,6 +35,7 @@ CONFIG_FILE = 'config.json'
 STATE_WAITING_SEARCH_NUM = 'awaiting_search_num'
 STATE_WAITING_SECTION_NUM = 'awaiting_section_num'
 STATE_WAITING_TEST_NUM = 'awaiting_test_num' # After txt file
+STATE_WAITING_SINGLE_FORMAT = 'awaiting_single_format' # --- NAYA STATE ---
 
 # --- State Definitions for Bulk Download ---
 # --- MODIFIED: Naya state (ASK_FILE_FORMAT) add kiya ---
@@ -124,6 +125,7 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
     context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
     context.user_data.pop(STATE_WAITING_TEST_NUM, None)
+    context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None) # --- NAYA STATE CLEANUP ---
     context.user_data.pop('search_results', None)
     context.user_data.pop('series_details', None)
     context.user_data.pop('last_tests', None) # Combined tests list
@@ -338,6 +340,46 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Search command mein error: {e}")
         await update.message.reply_text("Search karne mein error aaya.")
 
+# --- NAYA FUNCTION: Test list ko dobara bhejne ke liye ---
+async def resend_test_list_message(update: Update, context: ContextTypes.DEFAULT_TYPE, caption: str):
+    """Test list document ko dobara bhejta hai."""
+    chat_id = update.effective_chat.id
+    try:
+        combined_tests = context.user_data.get('last_tests')
+        selected_section = context.user_data.get('selected_section')
+        
+        if combined_tests and selected_section:
+            # Puraani list ko regenerate/resend karein
+            combined_test_list_str = ""
+            for i, test_info in enumerate(combined_tests):
+                # We need to recreate the list text
+                if i == 0 or test_info['subsection_context']['id'] != combined_tests[i-1]['subsection_context']['id']:
+                     combined_test_list_str += f"\n--- {test_info['subsection_context'].get('name', 'Subsection')} ---\n"
+                combined_test_list_str += f"{i+1}. {test_info['test_data'].get('title', 'N/A')}\n"
+
+            test_list_io = io.BytesIO(combined_test_list_str.encode('utf-8'))
+            test_list_io.name = f"{selected_section.get('name', 'section_tests')}.txt"
+            
+            keyboard = [[InlineKeyboardButton(f"📥 Download All in '{selected_section.get('name')}'", callback_data=f"bulk_subsection_all")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Purana message (agar koi hai) clear karein
+            await clear_previous_message(context, chat_id)
+
+            message = await context.bot.send_document(
+                chat_id=chat_id,
+                document=test_list_io,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            context.user_data['last_bot_message_id'] = message.message_id
+        else:
+            logger.warning("Test list resend nahi kar paya, data missing.")
+            
+    except Exception as e:
+        logger.error(f"Test list resend karte waqt error: {e}")
+
 @admin_required
 async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles text input based on the current state."""
@@ -348,6 +390,54 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
 
+    # --- State: Waiting for Single Test Format ---
+    # --- YEH CHECK AB NUMBER CHECK SE PEHLE AAYEGA ---
+    if context.user_data.get(STATE_WAITING_SINGLE_FORMAT):
+        file_format = text.lower()
+        
+        if file_format in ['html', 'txt', 'both']:
+            selected_test_info = context.user_data.get('single_test_info')
+            
+            if not selected_test_info:
+                await update.message.reply_text("Error: Session expire ho gaya hai. Kripya /search se dobara shuru karein.")
+                context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None)
+                return
+
+            # Format selection wale message ko delete karein
+            await clear_previous_message(context, chat_id)
+            # User ke format message ko delete karein
+            try:
+                await update.message.delete()
+            except Exception: pass
+
+            # States update karein
+            context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None)
+            context.user_data.pop('single_test_info', None) # Clean up test info
+            context.user_data[STATE_WAITING_TEST_NUM] = True # Wapas test num state mein jaayein
+
+            # Download process ko call karein
+            await process_single_test_download(
+                update.message, # Message object pass karein taaki reply kar sake
+                context,
+                selected_test_info['test_data'],
+                selected_test_info['section_context'],
+                selected_test_info['subsection_context'],
+                file_format # Naya parameter
+            )
+            
+            # Test list ko dobara bhej dein
+            await resend_test_list_message(
+                update, context, 
+                f"📂 **{selected_test_info['test_data'].get('title')}** download ho gaya hai.\n\nAgla test download karne ke liye list se **number** reply karein."
+            )
+            
+        else:
+            # Invalid format
+            await update.message.reply_text("Invalid format. Kripya `html`, `txt`, ya `both` reply karein.")
+        
+        return # --- IMPORTANT: Yahaan se return karein ---
+
+    # --- Ab number input check karein ---
     try:
         number = int(text) - 1 # Convert to 0-based index
 
@@ -497,13 +587,13 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 # Test info ko store karein taaki format callback use kar sake
                 context.user_data['single_test_info'] = selected_test_info
                 
-                # Format poochne ke liye buttons
-                keyboard = [
-                    [InlineKeyboardButton("HTML only", callback_data="format_html")],
+                # --- BUTTONS HATA DIYE GAYE ---
+                # keyboard = [
+                #     [InlineKeyboardButton("HTML only", callback_data="format_html")],
                     [InlineKeyboardButton("TXT only", callback_data="format_txt")],
-                    [InlineKeyboardButton("Both (HTML & TXT)", callback_data="format_both")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
+                #     [InlineKeyboardButton("Both (HTML & TXT)", callback_data="format_both")]
+                # ]
+                # reply_markup = InlineKeyboardMarkup(keyboard)
 
                 # Purane message ko delete karein (jo test list thi)
                 await clear_previous_message(context, chat_id) 
@@ -515,13 +605,16 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 
                 message = await context.bot.send_message(
                     chat_id=chat_id,
-                    text=f"Aapne '{selected_test_info['test_data'].get('title')}' chuna hai.\n\nAapko kis format mein chahiye?",
-                    reply_markup=reply_markup
+                    text=f"Aapne '{selected_test_info['test_data'].get('title')}' chuna hai.\n\n"
+                         "Aapko kis format mein chahiye? Kripya `html`, `txt`, ya `both` reply karein."
+                    # reply_markup=reply_markup --- REMOVED
                 )
                 # last_bot_message_id set karein taaki format button wala message clear ho sake
                 context.user_data['last_bot_message_id'] = message.message_id
                 
-                # State STATE_WAITING_TEST_NUM active rakhein
+                # State STATE_WAITING_TEST_NUM se STATE_WAITING_SINGLE_FORMAT mein badlein
+                context.user_data.pop(STATE_WAITING_TEST_NUM, None)
+                context.user_data[STATE_WAITING_SINGLE_FORMAT] = True
             else:
                 await update.message.reply_text(f"Invalid number. Kripya 1 aur {len(combined_tests)} ke beech ka number reply karein.")
             return # Don't fall through
@@ -535,9 +628,10 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # If text is not a number and no state is active, treat as search
         if not context.user_data.get(STATE_WAITING_SEARCH_NUM) and \
            not context.user_data.get(STATE_WAITING_SECTION_NUM) and \
-           not context.user_data.get(STATE_WAITING_TEST_NUM):
+           not context.user_data.get(STATE_WAITING_TEST_NUM) and \
+           not context.user_data.get(STATE_WAITING_SINGLE_FORMAT): # --- NAYA STATE CHECK ---
             await update.message.reply_text("Command samajh nahi aaya. Test search karne ke liye `/search <query>` type karein.", parse_mode=ParseMode.MARKDOWN)
-        else:
+        elif not context.user_data.get(STATE_WAITING_SINGLE_FORMAT):
             # If expecting a number but got text
              await update.message.reply_text("Invalid input. Kripya ek number type karein.")
              
@@ -548,12 +642,12 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
         context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
         context.user_data.pop(STATE_WAITING_TEST_NUM, None)
+        context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None) # --- NAYA STATE CLEANUP ---
 
-# --- NAYA FUNCTION: Single test ka format handle karne ke liye ---
-@admin_required
-async def handle_single_format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Jab user single test ke liye format (HTML/TXT/Both) chunta hai.
+
+# --- YEH FUNCTION AB ISTEMAL NAHI HOGA ---
+# @admin_required
+# async def handle_single_format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     query = update.callback_query
     await query.answer()
@@ -619,10 +713,10 @@ async def handle_single_format_selection(update: Update, context: ContextTypes.D
             )
             context.user_data['last_bot_message_id'] = message.message_id
         else:
-            logger.warning("Single download ke baad test list nahi bhej paya.")
-            
-    except Exception as e:
-        logger.error(f"Single download ke baad test list bhejte waqt error: {e}")
+#     """
+#     Jab user single test ke liye format (HTML/TXT/Both) chunta hai.
+#     """
+# ... (poora function remove kar diya) ...
 
 
 # --- Modified process_single_test_download to accept format ---
@@ -895,45 +989,54 @@ async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.delete()
     except Exception: pass
         
-    # --- NAYA: Format poochhein ---
-    keyboard = [
-        [InlineKeyboardButton("HTML only", callback_data="bulkformat_html")],
-        [InlineKeyboardButton("TXT only", callback_data="bulkformat_txt")],
-        [InlineKeyboardButton("Both (HTML & TXT)", callback_data="bulkformat_both")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    # --- NAYA: Format poochein (text ke saath) ---
+    # keyboard = [
+    #     [InlineKeyboardButton("HTML only", callback_data="bulkformat_html")],
+    #     [InlineKeyboardButton("TXT only", callback_data="bulkformat_txt")],
+    #     [InlineKeyboardButton("Both (HTML & TXT)", callback_data="bulkformat_both")]
+    # ]
+    # reply_markup = InlineKeyboardMarkup(keyboard)
     
     message = await context.bot.send_message(
         chat_id,
-        "📂 **File Format Chunein:**\n\nAapko files kis format mein chahiye?",
-        reply_markup=reply_markup
+        "📂 **File Format Chunein:**\n\nAapko files kis format mein chahiye? Kripya `html`, `txt`, ya `both` reply karein.",
+        # reply_markup=reply_markup --- REMOVED
     )
     context.user_data['last_bot_message_id'] = message.message_id # Store ID for next step
 
     return ASK_FILE_FORMAT # Naya state return karein
 
-# --- NAYA FUNCTION ---
+# --- NAYA FUNCTION (MODIFIED) ---
 @admin_required
 async def receive_bulk_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Bulk download ke liye file format save karta hai aur download shuru karta hai.
+    (Ab text input handle karta hai)
     """
-    query = update.callback_query
-    await query.answer()
+    file_format = update.message.text.strip().lower()
     
-    file_format = query.data.split('_')[1] # 'html', 'txt', 'both'
+    if file_format not in ['html', 'txt', 'both']:
+        await update.message.reply_text("Invalid format. Kripya `html`, `txt`, ya `both` reply karein.")
+        return ASK_FILE_FORMAT # State mein bane rahein
+
     context.user_data['bulk_file_format'] = file_format
     
-    # Format selection message ko edit karein
+    # Format selection message ko delete karein
+    await clear_previous_message(context, update.effective_chat.id)
+    # User ke message ko delete karein
     try:
-        await query.edit_message_text(f"✅ Format set to: **{file_format.upper()}**\n\nBulk download shuru ho raha hai... Process monitor karne ke liye neeche dekhein.")
+        await update.message.delete()
     except Exception: pass
     
-    # Purana message ID clear karein
-    context.user_data.pop('last_bot_message_id', None)
+    # Start message
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"✅ Format set to: **{file_format.upper()}**\n\nBulk download shuru ho raha hai... Process monitor karne ke liye neeche dekhein.",
+        parse_mode=ParseMode.MARKDOWN
+    )
     
     # Start the background task
-    asyncio.create_task(perform_bulk_download(query, context)) # Query pass karein
+    asyncio.create_task(perform_bulk_download(update, context)) # Update object pass karein
     
     # End the conversation
     return ConversationHandler.END
@@ -1196,6 +1299,7 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
         context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
         context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
         context.user_data.pop(STATE_WAITING_TEST_NUM, None)
+        context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None) # --- NAYA STATE CLEANUP ---
 
 
 
@@ -1253,7 +1357,7 @@ def main():
             ASK_START_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_start_number)],
             ASK_EXTRACTOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_extractor_name)],
             ASK_DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_destination)],
-            ASK_FILE_FORMAT: [CallbackQueryHandler(receive_bulk_format, pattern="^bulkformat_")]
+            ASK_FILE_FORMAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bulk_format)] # --- MODIFIED ---
         },
         fallbacks=[
             CommandHandler("cancel", cancel_bulk_conversation),
@@ -1286,8 +1390,8 @@ def main():
     # ... (pehle jaise hi)
     # --- END REMOVED Handlers ---
     
-    # --- NAYA HANDLER: Single test format selection ke liye ---
-    application.add_handler(CallbackQueryHandler(handle_single_format_selection, pattern="^format_"))
+    # --- REMOVED HANDLER: Single test format selection ke liye ---
+    # application.add_handler(CallbackQueryHandler(handle_single_format_selection, pattern="^format_"))
     
     application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")) # Keep main menu callback
 
@@ -1302,3 +1406,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
