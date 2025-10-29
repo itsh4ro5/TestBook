@@ -2,6 +2,9 @@
 import json
 import re
 import html # Naya import HTML entities ko handle karne ke liye
+import logging # Logging ke liye
+
+logger = logging.getLogger(__name__) # Logger instance banayein
 
 # --- HTML Template ---
 # JavaScript <script> block ke andar badlaav kiye gaye hain
@@ -231,10 +234,18 @@ HTML_TEMPLATE = """
             var txt = document.createElement("textarea");
             txt.innerHTML = html;
             let decodedHtml = txt.value;
-            // Relative URLs ko fix karein (protocol add karein)
-            decodedHtml = decodedHtml.replace(/src=(["'])\/\//g, 'src=$1https://');
-            // Root-relative URLs ko fix karein (domain add karein)
-            decodedHtml = decodedHtml.replace(/src=(["'])\/([^\/])/g, 'src=$1https://testbook.com/$2');
+            
+            // --- FIXED: Use try-catch and standard string replacement ---
+            try {
+                 // Relative URLs ko fix karein (protocol add karein) - using string replace
+                decodedHtml = decodedHtml.replace(/src=(["'])\/\//g, 'src=$1https://');
+                
+                // Root-relative URLs ko fix karein (domain add karein) - using string replace
+                decodedHtml = decodedHtml.replace(/src=(["'])\/([^\/])/g, 'src=$1https://testbook.com/$2');
+            } catch (e) {
+                 console.error("Error fixing image URLs:", e);
+                 // Agar replace fail hota hai toh original decoded HTML return karein
+            }
             return decodedHtml;
         }
 
@@ -759,17 +770,24 @@ def generate_html(quiz_data: dict, details: dict) -> str:
     
     # Try converting to float for JS, keep original string for display
     try:
-        correct_marks_js = float(re.search(r'([+-]?\d+\.?\d*)', correct_marks_str).group(1))
+        # Use regex to find the first number (positive or negative float/int)
+        correct_marks_js = float(re.search(r'([+-]?\d*\.?\d+)', correct_marks_str).group(1))
     except (AttributeError, ValueError, TypeError):
+         logger.warning(f"Could not parse correct marks '{correct_marks_str}' for JS, using default 1.0.")
          correct_marks_js = 1.0 # Fallback
     
     try:
-        incorrect_marks_js = float(re.search(r'([+-]?\d+\.?\d*)', incorrect_marks_str).group(1))
+        # Use regex to find the first number (positive or negative float/int)
+        incorrect_marks_js = float(re.search(r'([+-]?\d*\.?\d+)', incorrect_marks_str).group(1))
     except (AttributeError, ValueError, TypeError):
+         logger.warning(f"Could not parse incorrect marks '{incorrect_marks_str}' for JS, using default -0.25.")
          incorrect_marks_js = -0.25 # Fallback
 
     # HTML entities ko safely handle karein
     def safe_html_escape(value):
+        # Pehle None ko empty string mein convert karein
+        if value is None:
+             value = ''
         return html.escape(str(value), quote=True)
 
     replacements = {
@@ -846,6 +864,3 @@ if __name__ == '__main__':
         f.write(generated_html)
         
     print("Generated sample_output.html")
-
-
-
