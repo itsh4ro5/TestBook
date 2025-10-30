@@ -16,7 +16,7 @@ from functools import wraps # Decorator ke liye zaroori
 
 from extractor import TestbookExtractor
 from html_generator import generate_html
-from txt_generator import generate_txt # --- NAYA IMPORT ---
+from txt_generator import generate_txt # TXT generator import karein
 from config import TELEGRAM_BOT_TOKEN, BOT_OWNER_ID
 
 # --- Logging Setup ---
@@ -35,11 +35,11 @@ CONFIG_FILE = 'config.json'
 STATE_WAITING_SEARCH_NUM = 'awaiting_search_num'
 STATE_WAITING_SECTION_NUM = 'awaiting_section_num'
 STATE_WAITING_TEST_NUM = 'awaiting_test_num' # After txt file
-STATE_WAITING_SINGLE_FORMAT = 'awaiting_single_format' # --- NAYA STATE ---
+STATE_WAITING_FORMAT_SINGLE = 'awaiting_format_single' # Naya state single test format ke liye
 
 # --- State Definitions for Bulk Download ---
-# --- MODIFIED: Naya state (ASK_FILE_FORMAT) add kiya ---
-ASK_EXTRACTOR_NAME, ASK_START_NUMBER, ASK_DESTINATION, ASK_FILE_FORMAT = range(4)
+# --- MODIFIED: Naya state add kiya ---
+ASK_EXTRACTOR_NAME, ASK_START_NUMBER, ASK_DESTINATION, ASK_FORMAT_BULK = range(4) # Naya state ASK_FORMAT_BULK
 
 # --- Bot Data Stop Flag ---
 STOP_BULK_DOWNLOAD_FLAG = 'stop_bulk_download'
@@ -125,17 +125,19 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
     context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
     context.user_data.pop(STATE_WAITING_TEST_NUM, None)
-    context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None) # --- NAYA STATE CLEANUP ---
+    context.user_data.pop(STATE_WAITING_FORMAT_SINGLE, None) # Naya state clear karein
     context.user_data.pop('search_results', None)
     context.user_data.pop('series_details', None)
     context.user_data.pop('last_tests', None) # Combined tests list
+    context.user_data.pop('selected_test_info', None) # Selected test info clear karein
 
     # keyboard = [[InlineKeyboardButton("🔍 Search New Test", switch_inline_query_current_chat="")]] # Removed inline search
     # reply_markup = InlineKeyboardMarkup(keyboard)
     
+    # --- FIXED: text mein `/search <query>` ko <code> aur &lt; &gt; se replace kiya ---
     message = await context.bot.send_message(
         chat_id,
-        text=text + "\n\nTest search karne ke liye `/search <query>` type karein.", # Instruct user on how to search
+        text=text + "\n\nTest search karne ke liye <code>/search &lt;query&gt;</code> type karein.", # Instruct user on how to search
         # reply_markup=reply_markup, # Removed inline search button
         parse_mode=ParseMode.HTML
     )
@@ -292,8 +294,9 @@ async def view_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/start command handle karta hai."""
     user = update.effective_user
+    # --- FIXED: Markdown (**) ko HTML (<b>) se replace kiya ---
     welcome_text = (
-        f"👋 **Welcome, {user.first_name}!**\n\n"
+        f"👋 <b>Welcome, {user.first_name}!</b>\n\n"
         "Main Testbook Extractor Bot hoon. Main aapke liye tests extract kar sakta hoon."
     )
     await send_main_menu(update, context, welcome_text)
@@ -340,46 +343,6 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Search command mein error: {e}")
         await update.message.reply_text("Search karne mein error aaya.")
 
-# --- NAYA FUNCTION: Test list ko dobara bhejne ke liye ---
-async def resend_test_list_message(update: Update, context: ContextTypes.DEFAULT_TYPE, caption: str):
-    """Test list document ko dobara bhejta hai."""
-    chat_id = update.effective_chat.id
-    try:
-        combined_tests = context.user_data.get('last_tests')
-        selected_section = context.user_data.get('selected_section')
-        
-        if combined_tests and selected_section:
-            # Puraani list ko regenerate/resend karein
-            combined_test_list_str = ""
-            for i, test_info in enumerate(combined_tests):
-                # We need to recreate the list text
-                if i == 0 or test_info['subsection_context']['id'] != combined_tests[i-1]['subsection_context']['id']:
-                     combined_test_list_str += f"\n--- {test_info['subsection_context'].get('name', 'Subsection')} ---\n"
-                combined_test_list_str += f"{i+1}. {test_info['test_data'].get('title', 'N/A')}\n"
-
-            test_list_io = io.BytesIO(combined_test_list_str.encode('utf-8'))
-            test_list_io.name = f"{selected_section.get('name', 'section_tests')}.txt"
-            
-            keyboard = [[InlineKeyboardButton(f"📥 Download All in '{selected_section.get('name')}'", callback_data=f"bulk_subsection_all")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            # Purana message (agar koi hai) clear karein
-            await clear_previous_message(context, chat_id)
-
-            message = await context.bot.send_document(
-                chat_id=chat_id,
-                document=test_list_io,
-                caption=caption,
-                reply_markup=reply_markup,
-                parse_mode=ParseMode.MARKDOWN
-            )
-            context.user_data['last_bot_message_id'] = message.message_id
-        else:
-            logger.warning("Test list resend nahi kar paya, data missing.")
-            
-    except Exception as e:
-        logger.error(f"Test list resend karte waqt error: {e}")
-
 @admin_required
 async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles text input based on the current state."""
@@ -390,54 +353,38 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
 
-    # --- State: Waiting for Single Test Format ---
-    # --- YEH CHECK AB NUMBER CHECK SE PEHLE AAYEGA ---
-    if context.user_data.get(STATE_WAITING_SINGLE_FORMAT):
-        file_format = text.lower()
+    # --- Naya: State 4: Format selection (Single Test) ---
+    if context.user_data.get(STATE_WAITING_FORMAT_SINGLE):
+        selected_test_info = context.user_data.get('selected_test_info')
+        if not selected_test_info:
+            await update.message.reply_text("Session expire ho gaya hai. Dobara `/search` karein.", parse_mode=ParseMode.MARKDOWN)
+            context.user_data.pop(STATE_WAITING_FORMAT_SINGLE, None)
+            context.user_data.pop(STATE_WAITING_TEST_NUM, None) # Also clear test num state
+            return
+
+        format_choice = text.lower()
+        if format_choice not in ['html', 'txt', 'both']:
+            await update.message.reply_text("Invalid format. Kripya `html`, `txt`, ya `both` type karein.")
+            return # State ko active rakhein
+
+        # Format valid hai, process download
+        await process_single_test_download(
+            update, 
+            context, 
+            selected_test_info['test_data'],
+            selected_test_info['section_context'],
+            selected_test_info['subsection_context'],
+            format_choice # Pass the format
+        )
         
-        if file_format in ['html', 'txt', 'both']:
-            selected_test_info = context.user_data.get('single_test_info')
-            
-            if not selected_test_info:
-                await update.message.reply_text("Error: Session expire ho gaya hai. Kripya /search se dobara shuru karein.")
-                context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None)
-                return
+        # State clear karein, lekin test num state active rakhein
+        context.user_data.pop(STATE_WAITING_FORMAT_SINGLE, None)
+        context.user_data.pop('selected_test_info', None) # Selected test info clear karein
+        # STATE_WAITING_TEST_NUM active hai, taaki user agla number daal sake
+        await update.message.reply_text("Aap agla test download karne ke liye number reply kar sakte hain.")
+        return
 
-            # Format selection wale message ko delete karein
-            await clear_previous_message(context, chat_id)
-            # User ke format message ko delete karein
-            try:
-                await update.message.delete()
-            except Exception: pass
-
-            # States update karein
-            context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None)
-            context.user_data.pop('single_test_info', None) # Clean up test info
-            context.user_data[STATE_WAITING_TEST_NUM] = True # Wapas test num state mein jaayein
-
-            # Download process ko call karein
-            await process_single_test_download(
-                update.message, # Message object pass karein taaki reply kar sake
-                context,
-                selected_test_info['test_data'],
-                selected_test_info['section_context'],
-                selected_test_info['subsection_context'],
-                file_format # Naya parameter
-            )
-            
-            # Test list ko dobara bhej dein
-            await resend_test_list_message(
-                update, context, 
-                f"📂 **{selected_test_info['test_data'].get('title')}** download ho gaya hai.\n\nAgla test download karne ke liye list se **number** reply karein."
-            )
-            
-        else:
-            # Invalid format
-            await update.message.reply_text("Invalid format. Kripya `html`, `txt`, ya `both` reply karein.")
-        
-        return # --- IMPORTANT: Yahaan se return karein ---
-
-    # --- Ab number input check karein ---
+    # --- States 1, 2, 3 (Number input) ---
     try:
         number = int(text) - 1 # Convert to 0-based index
 
@@ -571,7 +518,6 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return # Don't fall through
 
         # --- State 3: Waiting for Test Number (after txt file) ---
-        # --- MODIFIED: Ab yeh download start nahi karega, format poochega ---
         elif context.user_data.get(STATE_WAITING_TEST_NUM):
             combined_tests = context.user_data.get('last_tests')
             series_details = context.user_data.get('series_details') # Keep series details
@@ -583,38 +529,19 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             if 0 <= number < len(combined_tests):
                 selected_test_info = combined_tests[number]
+                context.user_data['selected_test_info'] = selected_test_info # Store for format selection
                 
-                # Test info ko store karein taaki format callback use kar sake
-                context.user_data['single_test_info'] = selected_test_info
+                # Format poochne ke liye naya state set karein
+                context.user_data[STATE_WAITING_FORMAT_SINGLE] = True
+                # STATE_WAITING_TEST_NUM ko active rakhein
                 
-                # --- BUTTONS HATA DIYE GAYE ---
-                # keyboard = [
-                #     [InlineKeyboardButton("HTML only", callback_data="format_html")],
-                #     [InlineKeyboardButton("TXT only", callback_data="format_txt")],
-                #     [InlineKeyboardButton("Both (HTML & TXT)", callback_data="format_both")]
-                # ]
-                # reply_markup = InlineKeyboardMarkup(keyboard)
-
-                # Purane message ko delete karein (jo test list thi)
-                await clear_previous_message(context, chat_id) 
-                
-                # User ke number wale message ko delete karein
-                try:
-                    await update.message.delete()
-                except Exception: pass
-                
-                message = await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"Aapne '{selected_test_info['test_data'].get('title')}' chuna hai.\n\n"
-                         "Aapko kis format mein chahiye? Kripya `html`, `txt`, ya `both` reply karein."
-                    # reply_markup=reply_markup --- REMOVED
+                await update.message.reply_text(
+                    f"Aapne test select kiya: `{selected_test_info['test_data'].get('title')}`\n\n"
+                    "Aapko kaunsa format chahiye?\n"
+                    "Kripya reply karein: `html`, `txt`, ya `both`",
+                    parse_mode=ParseMode.MARKDOWN
                 )
-                # last_bot_message_id set karein taaki format button wala message clear ho sake
-                context.user_data['last_bot_message_id'] = message.message_id
                 
-                # State STATE_WAITING_TEST_NUM se STATE_WAITING_SINGLE_FORMAT mein badlein
-                context.user_data.pop(STATE_WAITING_TEST_NUM, None)
-                context.user_data[STATE_WAITING_SINGLE_FORMAT] = True
             else:
                 await update.message.reply_text(f"Invalid number. Kripya 1 aur {len(combined_tests)} ke beech ka number reply karein.")
             return # Don't fall through
@@ -622,16 +549,20 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # --- No Specific State ---
         else:
             # If no state is set, treat as a normal text message (could be a search query)
-             await update.message.reply_text("Command samajh nahi aaya. Test search karne ke liye `/search <query>` type karein.", parse_mode=ParseMode.MARKDOWN)
+             await update.message.reply_text("Command samajh nahi aaya. Test search karne ke liye <code>/search &lt;query&gt;</code> type karein.", parse_mode=ParseMode.HTML)
 
     except (ValueError, TypeError):
         # If text is not a number and no state is active, treat as search
         if not context.user_data.get(STATE_WAITING_SEARCH_NUM) and \
            not context.user_data.get(STATE_WAITING_SECTION_NUM) and \
            not context.user_data.get(STATE_WAITING_TEST_NUM) and \
-           not context.user_data.get(STATE_WAITING_SINGLE_FORMAT): # --- NAYA STATE CHECK ---
-            await update.message.reply_text("Command samajh nahi aaya. Test search karne ke liye `/search <query>` type karein.", parse_mode=ParseMode.MARKDOWN)
-        elif not context.user_data.get(STATE_WAITING_SINGLE_FORMAT):
+           not context.user_data.get(STATE_WAITING_FORMAT_SINGLE): # Naya state check karein
+             await update.message.reply_text("Command samajh nahi aaya. Test search karne ke liye <code>/search &lt;query&gt;</code> type karein.", parse_mode=ParseMode.HTML)
+        elif context.user_data.get(STATE_WAITING_FORMAT_SINGLE):
+            # Agar format selection state mein hai, toh text input (html, txt, both) valid hai
+            # Yeh block already upar handle ho gaya hai, lekin safe side ke liye
+            pass
+        else:
             # If expecting a number but got text
              await update.message.reply_text("Invalid input. Kripya ek number type karein.")
              
@@ -642,34 +573,13 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
         context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
         context.user_data.pop(STATE_WAITING_TEST_NUM, None)
-        context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None) # --- NAYA STATE CLEANUP ---
-
-
-# --- YEH FUNCTION AB ISTEMAL NAHI HOGA ---
-# @admin_required
-# async def handle_single_format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     """
-#     Jab user single test ke liye format (HTML/TXT/Both) chunta hai.
-#     """
-# ... (poora function remove kar diya) ...
+        context.user_data.pop(STATE_WAITING_FORMAT_SINGLE, None)
 
 
 # --- Modified process_single_test_download to accept format ---
-async def process_single_test_download(
-    message, # Yeh 'update.message' ya 'query.message' ho sakta hai
-    context: ContextTypes.DEFAULT_TYPE, 
-    selected_test: dict, 
-    section_context: dict, 
-    subsection_context: dict, 
-    file_format: str = "html" # Default to html
-):
-    """Ek single test ko download aur send karta hai, format ke hisab se."""
-    
-    processing_message = await context.bot.send_message(
-        chat_id=message.chat.id,
-        text=f"⏳ **Processing...**\n`{selected_test.get('title')}` (Format: {file_format.upper()})\n\nTest extract karne mein 1-2 minute lag sakte hain...", 
-        parse_mode=ParseMode.MARKDOWN
-    )
+async def process_single_test_download(update: Update, context: ContextTypes.DEFAULT_TYPE, selected_test: dict, section_context: dict, subsection_context: dict, file_format: str):
+    """Ek single test ko download aur send karta hai, specified format mein."""
+    processing_message = await update.message.reply_text(f"⏳ **Processing...**\n`{selected_test.get('title')}`\n\nTest extract karne mein 1-2 minute lag sakte hain...", parse_mode=ParseMode.MARKDOWN)
     
     try:
         test_id = selected_test.get('id')
@@ -685,7 +595,7 @@ async def process_single_test_download(
             await processing_message.edit_text(f"Error extracting test: {questions_data.get('error')}")
             return
             
-        # Caption generate karein (extractor.last_details ka istemal karega)
+        # Caption generate karein using passed context
         caption = extractor.get_caption(
             test_summary=selected_test,
             series_details=series_details,
@@ -694,65 +604,59 @@ async def process_single_test_download(
             # Extractor name is not needed for single download
         )
         
-        sent_messages = []
+        # File name (bina extension)
+        base_file_name = f"{selected_test.get('title', 'test')[:50]}".replace('/', '_')
         
-        # --- HTML File Bhejein (agar poocha hai) ---
-        if file_format == "html" or file_format == "both":
+        files_to_send = []
+        
+        # Generate HTML if needed
+        if file_format in ['html', 'both']:
             html_content = generate_html(questions_data, extractor.last_details)
             html_file = io.BytesIO(html_content.encode('utf-8'))
-            file_name = f"{selected_test.get('title', 'test')[:50]}.html".replace('/', '_')
-            html_file.name = file_name
-            
-            sent_html = await context.bot.send_document(
-                chat_id=message.chat.id,
-                document=html_file,
-                caption=caption if file_format == "html" else f"{caption}\n\n[HTML Version]", # Caption adjust karein
-                parse_mode=ParseMode.MARKDOWN
-            )
-            sent_messages.append(sent_html)
-            
-        # --- TXT File Bhejein (agar poocha hai) ---
-        if file_format == "txt" or file_format == "both":
-            txt_content = generate_txt(questions_data, extractor.last_details)
-            txt_file = io.BytesIO(txt_content.encode('utf-8'))
-            file_name_txt = f"{selected_test.get('title', 'test')[:50]}.txt".replace('/', '_')
-            txt_file.name = file_name_txt
-            
-            sent_txt = await context.bot.send_document(
-                chat_id=message.chat.id,
-                document=txt_file,
-                caption=caption if file_format == "txt" else f"{caption}\n\n[TXT Version]", # Caption adjust karein
-                parse_mode=ParseMode.MARKDOWN
-            )
-            sent_messages.append(sent_txt)
+            html_file.name = f"{base_file_name}.html"
+            files_to_send.append(html_file)
         
+        # Generate TXT if needed
+        if file_format in ['txt', 'both']:
+            txt_content = generate_txt(questions_data) # Use new generator
+            txt_file = io.BytesIO(txt_content.encode('utf-8'))
+            txt_file.name = f"{base_file_name}.txt"
+            files_to_send.append(txt_file)
+
         # Processing message delete karein
         await processing_message.delete()
+        
+        sent_messages = []
+        # Files ko user ko send karein (ek-ek karke)
+        for i, file_to_send in enumerate(files_to_send):
+            sent_msg = await update.message.reply_document(
+                document=file_to_send,
+                caption=caption if i == 0 else None, # Sirf pehli file par caption lagayein
+                parse_mode=ParseMode.MARKDOWN
+            )
+            sent_messages.append(sent_msg)
         
         # Auto-forward karein (agar set hai)
         config = get_config()
         channel_id = config.get('forward_channel_id')
         if channel_id:
-            for sent_msg in sent_messages:
-                try:
+            try:
+                for sent_message in sent_messages:
                     await context.bot.forward_message(
                         chat_id=channel_id,
-                        from_chat_id=sent_msg.chat.id,
-                        message_id=sent_msg.message_id
+                        from_chat_id=update.effective_chat.id,
+                        message_id=sent_message.message_id
                     )
-                except Exception as e:
-                    logger.error(f"Channel {channel_id} mein forward karne mein error: {e}")
-                    await context.bot.send_message(
-                        chat_id=message.chat.id,
-                        text=f"⚠️ Test send ho gaya hai, lekin channel `{channel_id}` mein forward nahi kar paya. (Error: {e})", 
-                        parse_mode=ParseMode.MARKDOWN
-                    )
+            except Exception as e:
+                logger.error(f"Channel {channel_id} mein forward karne mein error: {e}")
+                await update.message.reply_text(f"⚠️ Test send ho gaya hai, lekin channel `{channel_id}` mein forward nahi kar paya. (Error: {e})", parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"Test download/send karne mein error: {e}")
         try:
             await processing_message.edit_text(f"Test process karne mein ek error aaya: {e}")
-        except Exception: pass
+        except Exception:
+            await update.message.reply_text(f"Test process karne mein ek error aaya: {e}")
 
 
 # =============================================================================
@@ -782,13 +686,12 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # =============================================================================
 # === BULK DOWNLOAD CONVERSATION ===
 # =============================================================================
-# This part is MODIFIED to include the ASK_START_NUMBER and ASK_FILE_FORMAT state.
+# This part is MODIFIED to include ASK_FORMAT_BULK.
 
 @admin_required
 async def bulk_download_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Bulk download shuru karta hai, STARTING NUMBER poochta hai.
-    (MODIFIED)
     """
     query = update.callback_query
     await query.answer()
@@ -796,7 +699,6 @@ async def bulk_download_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Store karein ki kya download karna hai
     context.user_data['bulk_query_data'] = query.data
     
-    # --- MODIFIED: Ab extractor name nahi, start number poochhein ---
     text = (
         f"🔢 **Kahaan se Shuru Karein?**\n\n"
         "Kripya test ka starting number type karein (jaise list mein 5 number se shuru karne ke liye `5` type karein).\n\n"
@@ -814,12 +716,12 @@ async def bulk_download_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
          logger.error(f"Bulk start edit error: {e}")
 
-    return ASK_START_NUMBER # --- MODIFIED: Naya state return karein ---
+    return ASK_START_NUMBER 
 
 @admin_required
 async def receive_start_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    (NEW FUNCTION) Start number save karta hai aur extractor ka naam poochta hai.
+    Start number save karta hai aur extractor ka naam poochta hai.
     """
     chat_id = update.effective_chat.id
     try:
@@ -864,7 +766,6 @@ async def receive_start_number(update: Update, context: ContextTypes.DEFAULT_TYP
 async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Extractor ka naam save karta hai aur destination poochta hai.
-    (MODIFIED: Sirf return value change hua)
     """
     extractor_name = update.message.text.strip()
     context.user_data['bulk_extractor_name'] = extractor_name
@@ -904,8 +805,7 @@ async def receive_extractor_name(update: Update, context: ContextTypes.DEFAULT_T
 @admin_required
 async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Destination save karta hai aur file format poochta hai.
-    (MODIFIED)
+    Destination save karta hai aur file format poochta hai. (MODIFIED)
     """
     destination_input = update.message.text.strip()
     context.user_data['bulk_destination'] = destination_input
@@ -924,54 +824,51 @@ async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.delete()
     except Exception: pass
         
-    # --- NAYA: Format poochein (text ke saath) ---
-    # keyboard = [
-    #     [InlineKeyboardButton("HTML only", callback_data="bulkformat_html")],
-    #     [InlineKeyboardButton("TXT only", callback_data="bulkformat_txt")],
-    #     [InlineKeyboardButton("Both (HTML & TXT)", callback_data="bulkformat_both")]
-    # ]
-    # reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    message = await context.bot.send_message(
-        chat_id,
-        "📂 **File Format Chunein:**\n\nAapko files kis format mein chahiye? Kripya `html`, `txt`, ya `both` reply karein.",
-        # reply_markup=reply_markup --- REMOVED
+    # --- Naya: Format poochhein ---
+    text = (
+        "💾 **File Format Chunein:**\n\n"
+        "Aapko files kaunse format mein chahiye?\n\n"
+        "Kripya reply karein:\n"
+        "- `html` (Sirf HTML files)\n"
+        "- `txt` (Sirf Text files)\n"
+        "- `both` (HTML aur TXT dono)\n\n"
+        "Cancel karne ke liye /cancel type karein."
     )
-    context.user_data['last_bot_message_id'] = message.message_id # Store ID for next step
+    
+    message = await context.bot.send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+    context.user_data['last_bot_message_id'] = message.message_id # Store ID for the next step
 
-    return ASK_FILE_FORMAT # Naya state return karein
+    return ASK_FORMAT_BULK # Naya state return karein
 
-# --- NAYA FUNCTION (MODIFIED) ---
 @admin_required
-async def receive_bulk_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def receive_format_bulk(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Bulk download ke liye file format save karta hai aur download shuru karta hai.
-    (Ab text input handle karta hai)
+    (NAYA FUNCTION) File format save karta hai aur bulk download shuru karta hai.
     """
     file_format = update.message.text.strip().lower()
     
     if file_format not in ['html', 'txt', 'both']:
-        await update.message.reply_text("Invalid format. Kripya `html`, `txt`, ya `both` reply karein.")
-        return ASK_FILE_FORMAT # State mein bane rahein
+        await update.message.reply_text("Invalid format. Kripya `html`, `txt`, ya `both` type karein.")
+        return ASK_FORMAT_BULK # State ko active rakhein
 
-    context.user_data['bulk_file_format'] = file_format
+    context.user_data['bulk_format'] = file_format
     
-    # Format selection message ko delete karein
-    await clear_previous_message(context, update.effective_chat.id)
-    # User ke message ko delete karein
+    chat_id = update.effective_chat.id
+
+    # Try deleting the "File Format Chunein" prompt
+    if 'last_bot_message_id' in context.user_data:
+         try:
+            await context.bot.delete_message(chat_id, context.user_data['last_bot_message_id'])
+         except Exception: pass
+         context.user_data.pop('last_bot_message_id', None) # Clean up the ID
+            
+    # Delete the user's message (the format)
     try:
         await update.message.delete()
     except Exception: pass
-    
-    # Start message
-    await context.bot.send_message(
-        update.effective_chat.id,
-        f"✅ Format set to: **{file_format.upper()}**\n\nBulk download shuru ho raha hai... Process monitor karne ke liye neeche dekhein.",
-        parse_mode=ParseMode.MARKDOWN
-    )
-    
+        
     # Start the background task
-    asyncio.create_task(perform_bulk_download(update, context)) # Update object pass karein
+    asyncio.create_task(perform_bulk_download(update, context))
     
     # End the conversation
     return ConversationHandler.END
@@ -980,7 +877,7 @@ async def receive_bulk_format(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def cancel_bulk_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Bulk download conversation ko cancel karta hai.
-    (MODIFIED: Naye states clean karein)
+    (MODIFIED: Naya state clean karein)
     """
     await clear_previous_message(context, update.effective_chat.id)
     
@@ -991,22 +888,22 @@ async def cancel_bulk_conversation(update: Update, context: ContextTypes.DEFAULT
     # Cleanup user data specific to bulk download
     context.user_data.pop('bulk_query_data', None)
     context.user_data.pop('bulk_extractor_name', None)
-    context.user_data.pop('bulk_start_number', None) # --- ADDED ---
+    context.user_data.pop('bulk_start_number', None) 
     context.user_data.pop('bulk_destination', None)
-    context.user_data.pop('bulk_file_format', None) # --- ADDED ---
+    context.user_data.pop('bulk_format', None) # --- ADDED ---
     
     # Send main menu again
     await send_main_menu(update, context, "🏠 Main Menu")
     return ConversationHandler.END
 
 # --- Bulk Download Logic (MODIFIED) ---
-async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # 'update' ab query ya message ho sakta hai
+async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Asynchronously sabhi tests ko download aur forward karta hai.
-    (MODIFIED: Start number aur file format ka istemal karega)
+    (MODIFIED: Start number aur format ka istemal karega)
     """
     if not extractor:
-        await context.bot.send_message(update.effective_chat.id, "Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
+        await update.message.reply_text("Bot abhi initialized nahi hai. Owner se /settoken karne ko kahein.")
         return
         
     user_chat_id = update.effective_chat.id
@@ -1015,7 +912,7 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
     query_data = context.user_data.get('bulk_query_data')
     extractor_name = context.user_data.get('bulk_extractor_name')
     destination = context.user_data.get('bulk_destination')
-    file_format = context.user_data.get('bulk_file_format', 'html') # Default 'html'
+    file_format = context.user_data.get('bulk_format', 'html') # Default 'html'
     
     # 1-based start number lein, default 1
     start_from_number = context.user_data.get('bulk_start_number', 1) 
@@ -1074,26 +971,9 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
                     if tests:
                         tests_to_process.extend([(test, selected_section, sub) for test in tests])
             
-            elif parts[2] == "single": # Download all tests in the selected subsection
-                selected_subsection = context.user_data.get('selected_subsection')
-                if not selected_subsection:
-                    await context.bot.send_message(user_chat_id, "Error: Subsection data nahi mila. /start se dobara search karein.")
-                    return ConversationHandler.END
-                bulk_level_name = selected_subsection.get('name', 'Subsection')
-                # Use the already fetched list if available
-                tests = context.user_data.get('last_tests') 
-                # last_tests now contains dicts with 'test_data', 'section_context', 'subsection_context'
-                # Filter just the tests belonging to the selected subsection
-                if tests:
-                    tests_from_subsection = [
-                        t_info['test_data'] for t_info in tests 
-                        if t_info['subsection_context']['id'] == selected_subsection['id']
-                    ]
-                    tests_to_process.extend([(test, selected_section, selected_subsection) for test in tests_from_subsection])
-                else: # Fallback: fetch again if last_tests wasn't populated right
-                     tests = extractor.get_tests_in_subsection(series_details['id'], selected_section['id'], selected_subsection['id'])
-                     if tests:
-                         tests_to_process.extend([(test, selected_section, selected_subsection) for test in tests])
+            # (Note: "bulk_subsection_single" case yahaan se hata diya gaya hai kyonki UI use ab trigger nahi karta, 
+            #  lekin logic rakha ja sakta hai agar zaroorat ho. Abhi ke liye yeh 'all' par hi chalega.)
+
 
         if not tests_to_process:
             await context.bot.send_message(user_chat_id, f"Error: '{bulk_level_name}' mein download karne ke liye koi tests nahi mile.")
@@ -1116,8 +996,8 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
             user_chat_id, 
             f"✅ Starting bulk download for **{bulk_level_name}** ({total_tests_in_batch} tests).\n"
             f"(Starting from number {start_from_number} of {original_total} total)\n" # User ko batayein
-            f"Format: **{file_format.upper()}**\n" # Format batayein
-            f"Destination: `{final_chat_id}`\n\n"
+            f"Destination: `{final_chat_id}`\n"
+            f"Format: `{file_format}`\n\n"
             "Rokne ke liye /stop type karein.",
             parse_mode=ParseMode.MARKDOWN
         )
@@ -1136,7 +1016,7 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
             # Asli test number (original list ke hisab se)
             actual_test_number = start_index + completed_in_this_batch 
             
-            # File name (bina extension)
+            # File name mein asli number add karein
             base_file_name = f"{actual_test_number}. {test.get('title', 'test')[:50]}".replace('/', '_')
 
 
@@ -1156,32 +1036,32 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
                     extractor_name=extractor_name # Add extractor name here
                 )
                 
-                # --- 3. HTML File (agar poocha hai) ---
-                if file_format == "html" or file_format == "both":
+                # 3. Files generate karein
+                files_to_send = []
+                
+                # Generate HTML if needed
+                if file_format in ['html', 'both']:
                     html_content = generate_html(questions_data, extractor.last_details)
                     html_file = io.BytesIO(html_content.encode('utf-8'))
                     html_file.name = f"{base_file_name}.html"
-                    
-                    await context.bot.send_document(
-                        chat_id=final_chat_id,
-                        document=html_file,
-                        caption=caption if file_format == "html" else f"{caption}\n\n[HTML Version]",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-
-                # --- 4. TXT File (agar poocha hai) ---
-                if file_format == "txt" or file_format == "both":
-                    txt_content = generate_txt(questions_data, extractor.last_details)
+                    files_to_send.append(html_file)
+                
+                # Generate TXT if needed
+                if file_format in ['txt', 'both']:
+                    txt_content = generate_txt(questions_data) # Use new generator
                     txt_file = io.BytesIO(txt_content.encode('utf-8'))
                     txt_file.name = f"{base_file_name}.txt"
-                    
+                    files_to_send.append(txt_file)
+
+                
+                # 4. Files ko destination par send karein
+                for i, file_to_send in enumerate(files_to_send):
                     await context.bot.send_document(
                         chat_id=final_chat_id,
-                        document=txt_file,
-                        caption=caption if file_format == "txt" else f"{caption}\n\n[TXT Version]",
+                        document=file_to_send,
+                        caption=caption if i == 0 else None, # Sirf pehli file par caption
                         parse_mode=ParseMode.MARKDOWN
                     )
-
                 
                 # 5. Progress update karein (MODIFIED)
                 current_time = asyncio.get_event_loop().time()
@@ -1195,8 +1075,8 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
                         await progress_message.edit_text(
                             f"📥 Downloading **{bulk_level_name}**...\n\n"
                             f"Progess: {bar} {completed_in_this_batch}/{total_tests_in_batch} ({int(progress * 100)}%)\n"
-                            f"(Overall Test {actual_test_number}/{original_total}) (Format: {file_format.upper()})\n\n"
-                            f"File: `{base_file_name}`\n"
+                            f"(Overall Test {actual_test_number}/{original_total})\n\n"
+                            f"File: `{base_file_name}` (Format: {file_format})\n"
                             f"Destination: `{final_chat_id}`\n\n"
                             "Rokne ke liye /stop type karein.",
                             parse_mode=ParseMode.MARKDOWN
@@ -1215,7 +1095,7 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
         # Check if download completed without being stopped (MODIFIED)
         if not context.bot_data.get(user_chat_id, {}).get(STOP_BULK_DOWNLOAD_FLAG, False):
             actual_test_number = start_index + completed_in_this_batch
-            await progress_message.edit_text(f"✅ **Bulk Download Complete!**\n\n{completed_in_this_batch}/{total_tests_in_batch} tests (from {start_from_number} to {actual_test_number}) from **{bulk_level_name}** (Format: {file_format.upper()}) sent to `{final_chat_id}`.", parse_mode=ParseMode.MARKDOWN)
+            await progress_message.edit_text(f"✅ **Bulk Download Complete!**\n\n{completed_in_this_batch}/{total_tests_in_batch} tests (from {start_from_number} to {actual_test_number}) from **{bulk_level_name}** sent to `{final_chat_id}`.", parse_mode=ParseMode.MARKDOWN)
 
     except Exception as e:
         logger.error(f"Bulk download mein bada error: {e}")
@@ -1227,14 +1107,13 @@ async def perform_bulk_download(update, context: ContextTypes.DEFAULT_TYPE): # '
         # Clean up user_data specific to this bulk download (MODIFIED)
         context.user_data.pop('bulk_query_data', None)
         context.user_data.pop('bulk_extractor_name', None)
-        context.user_data.pop('bulk_start_number', None) # --- ADDED ---
+        context.user_data.pop('bulk_start_number', None) 
         context.user_data.pop('bulk_destination', None)
-        context.user_data.pop('bulk_file_format', None) # --- ADDED ---
+        context.user_data.pop('bulk_format', None) # --- ADDED ---
         # Reset general state flags as well
         context.user_data.pop(STATE_WAITING_SEARCH_NUM, None)
         context.user_data.pop(STATE_WAITING_SECTION_NUM, None)
         context.user_data.pop(STATE_WAITING_TEST_NUM, None)
-        context.user_data.pop(STATE_WAITING_SINGLE_FORMAT, None) # --- NAYA STATE CLEANUP ---
 
 
 
@@ -1275,9 +1154,7 @@ def main():
     if not init_extractor():
         logger.warning("Bot shuru ho raha hai, lekin Testbook Token set nahi hai. /settoken ka istemal karein.")
 
-    # --- REMOVED post_init ---
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    # --- END REMOVAL ---
 
     # --- Bulk Download Conversation Handler (MODIFIED) ---
     bulk_download_conv = ConversationHandler(
@@ -1285,14 +1162,14 @@ def main():
             # These buttons are now shown in messages after text selection
             CallbackQueryHandler(bulk_download_start, pattern="^bulk_section_all$"),
             CallbackQueryHandler(bulk_download_start, pattern="^bulk_subsection_all$"),
-            CallbackQueryHandler(bulk_download_start, pattern="^bulk_subsection_single$"),
+            # CallbackQueryHandler(bulk_download_start, pattern="^bulk_subsection_single$"), # Yeh wala ab use nahi ho raha
         ],
         states={
             # --- MODIFIED: Naye states add kiye ---
             ASK_START_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_start_number)],
             ASK_EXTRACTOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_extractor_name)],
             ASK_DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_destination)],
-            ASK_FILE_FORMAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bulk_format)] # --- MODIFIED ---
+            ASK_FORMAT_BULK: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_format_bulk)], # Naya state
         },
         fallbacks=[
             CommandHandler("cancel", cancel_bulk_conversation),
@@ -1321,17 +1198,11 @@ def main():
     application.add_handler(CommandHandler("viewchannel", view_channel))
     application.add_handler(CommandHandler("stop", stop_bulk_download)) 
 
-    # --- REMOVED Handlers ---
-    # ... (pehle jaise hi)
-    # --- END REMOVED Handlers ---
-    
-    # --- REMOVED HANDLER: Single test format selection ke liye ---
-    # application.add_handler(CallbackQueryHandler(handle_single_format_selection, pattern="^format_"))
-    
     application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")) # Keep main menu callback
 
 
     # Text handler (handles number inputs based on state)
+    # Yeh handler naye STATE_WAITING_FORMAT_SINGLE ko bhi handle karega
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
 
     logger.info("Bot shuru ho raha hai...")
