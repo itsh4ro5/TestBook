@@ -268,4 +268,3 @@ class TestbookExtractor:
 
         return caption
 
-
