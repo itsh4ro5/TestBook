@@ -2,20 +2,78 @@
 import re
 import html
 
+def _clean_math_tex(math_string: str) -> str:
+    """
+    Simple conversion of math-tex to plain text.
+    (LaTeX-like math ko saaf karne ke liye helper function)
+    """
+    if not math_string:
+        return ""
+    
+    # \ (aur \) ko remove karein
+    text = math_string.replace(r'\(', ' ').replace(r'\)', ' ')
+    
+    # \frac{A}{B} ko (A / B) se replace karein
+    # Yeh nested braces ke simple cases ko handle karta hai
+    text = re.sub(r'\\frac{({[^}]+}|[^}]+)}{({[^}]+}|[^}]+)}', r'(\1 / \2)', text)
+    
+    # Subscripts jaise {C_u} ko Cu banayein
+    text = re.sub(r'{([^_}]+)_([^_}]+)}', r'\1\2', text)
+    
+    # Bachi hui curly braces {} ko hata dein
+    text = text.replace('{', '').replace('}', '')
+    
+    # Common LaTeX commands ko replace karein
+    text = text.replace(r'\;', ' ').replace(r'\times', 'x').replace(r'\div', '/')
+    text = text.replace(r'\Rightarrow', '=>').replace(r'\rightarrow', '->')
+    text = text.replace(r'\leq', '<=').replace(r'\geq', '>=')
+    text = text.replace(r'\approx', '~=')
+    
+    # Common symbols
+    text = text.replace(r'\Delta', 'Delta').replace(r'\delta', 'delta')
+    text = text.replace(r'\gamma', 'gamma').replace(r'\alpha', 'alpha')
+    text = text.replace(r'\beta', 'beta').replace(r'\lambda', 'lambda')
+    text = text.replace(r'\mu', 'mu').replace(r'\pi', 'pi')
+    
+    # Bachi hui backslashes \ ko hata dein
+    text = text.replace('\\', '')
+    
+    return text.strip()
+
 def _clean_html_to_text(html_string: str) -> str:
     """
     Ek simple HTML remover jo HTML ko plain text mein convert karta hai.
+    (MODIFIED: Math aur sub/sup tags ko handle karne ke liye)
     """
     if not html_string:
         return ""
-        
-    # HTML tags ko remove karein
-    text = re.sub(r'<[^>]+>', ' ', html_string)
     
-    # HTML entities (jaise &nbsp; &amp;) ko decode karein
+    text = html_string
+
+    # 1. Math-tex spans ko pehle process karein
+    # Sabhi math-tex spans dhoondhein
+    def math_replacer(match):
+        # Span ke andar ka content nikalein
+        inner_html = match.group(1)
+        # Andar ke HTML ko clean karein (agar koi tag ho)
+        inner_text = re.sub(r'<[^>]+>', '', inner_html)
+        inner_text = html.unescape(inner_text)
+        # Math string ko process karein
+        return " " + _clean_math_tex(inner_text) + " "
+
+    text = re.sub(r'<span class="math-tex">(.*?)</span>', math_replacer, text, flags=re.DOTALL)
+
+    # 2. sub/sup tags ko handle karein (bina space add kiye)
+    text = re.sub(r'</?sub>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?sup>', '', text, flags=re.IGNORECASE)
+    
+    # 3. Baaki bache hue HTML tags ko remove karein (space ke saath)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    
+    # 4. HTML entities (jaise &nbsp; &amp;) ko decode karein
     text = html.unescape(text)
     
-    # Extra whitespace ko clean karein
+    # 5. Extra whitespace ko clean karein
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
@@ -51,6 +109,7 @@ def _get_localized_text(content_object, lang='en'):
 def generate_txt(quiz_data: dict, details: dict) -> str:
     """
     JSON data aur test details se ek complete TXT string generate karta hai.
+    (MODIFIED: Solution part ko hata diya gaya hai)
     """
     if not quiz_data or 'questions' not in quiz_data:
         return "Error: Invalid Quiz Data."
@@ -99,11 +158,16 @@ def generate_txt(quiz_data: dict, details: dict) -> str:
             if opt.get('is_correct', False):
                 correct_option_text = opt_text
 
-        # Solution
-        solution_text = _get_localized_text(q.get('solution', {}))
-        
+        # Answer (Correct Option Text)
         output_lines.append(f"\n  Answer: {correct_option_text}")
-        output_lines.append(f"  Solution: {solution_text}")
+        
+        # --- REMOVED ---
+        # Solution line has been removed as requested by user.
+        # solution_text = _get_localized_text(q.get('solution', {}))
+        # output_lines.append(f"  Solution: {solution_text}")
+        # --- END REMOVED ---
+        
         output_lines.append("\n" + "-" * 30 + "\n")
 
     return "\n".join(output_lines)
+
