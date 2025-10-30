@@ -618,7 +618,8 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
         
         # Generate TXT if needed
         if file_format in ['txt', 'both']:
-            txt_content = generate_txt(questions_data) # Use new generator
+            # --- FIXED: extractor.last_details ko pass kiya ---
+            txt_content = generate_txt(questions_data, extractor.last_details) # Use new generator
             txt_file = io.BytesIO(txt_content.encode('utf-8'))
             txt_file.name = f"{base_file_name}.txt"
             files_to_send.append(txt_file)
@@ -1048,7 +1049,8 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                 
                 # Generate TXT if needed
                 if file_format in ['txt', 'both']:
-                    txt_content = generate_txt(questions_data) # Use new generator
+                    # --- FIXED: extractor.last_details ko pass kiya ---
+                    txt_content = generate_txt(questions_data, extractor.last_details) # Use new generator
                     txt_file = io.BytesIO(txt_content.encode('utf-8'))
                     txt_file.name = f"{base_file_name}.txt"
                     files_to_send.append(txt_file)
