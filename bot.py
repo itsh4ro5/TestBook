@@ -632,7 +632,7 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
         for i, file_to_send in enumerate(files_to_send):
             sent_msg = await update.message.reply_document(
                 document=file_to_send,
-                caption=caption if i == 0 else None, # Sirf pehli file par caption lagayein
+                caption=caption, # <-- YEH BADLAAV HAI
                 parse_mode=ParseMode.MARKDOWN
             )
             sent_messages.append(sent_msg)
@@ -1214,4 +1214,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
