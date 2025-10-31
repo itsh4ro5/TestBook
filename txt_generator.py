@@ -47,32 +47,30 @@ def _clean_html_to_text(html_string: str) -> str:
     if not html_string:
         return ""
     
-    text = html_string
+    # 1. (NAYA ORDER) HTML entities (jaise &lt;, &gt;, &amp;, &nbsp;) ko decode karein
+    # Isse "&lt;p&gt;" asli "<p>" ban jayega
+    text = html.unescape(html_string)
 
-    # 1. Math-tex spans ko pehle process karein
+    # 2. Math-tex spans ko pehle process karein
     def math_replacer(match):
         # Span ke andar ka content nikalein
         inner_html = match.group(1)
-        # Andar ke HTML ko clean karein (agar koi tag ho)
+        # Andar ke HTML ko clean karein (agar koi tag ho - ab zaroori nahi)
         inner_text = re.sub(r'<[^>]+>', '', inner_html)
-        inner_text = html.unescape(inner_text)
         # Math string ko process karein
         return " " + _clean_math_tex(inner_text) + " "
 
     text = re.sub(r'<span class="math-tex">(.*?)</span>', math_replacer, text, flags=re.DOTALL)
 
-    # 2. sub/sup tags ko handle karein (bina space add kiye)
+    # 3. sub/sup tags ko handle karein (bina space add kiye)
     text = re.sub(r'</?sub>', '', text, flags=re.IGNORECASE)
     text = re.sub(r'</?sup>', '', text, flags=re.IGNORECASE)
     
-    # 3. Baaki bache hue SABHI HTML tags ko remove karein (space ke saath)
+    # 4. Baaki bache hue SABHI HTML tags ko remove karein (space ke saath)
     # Yeh <p>, </p>, <span style="">, </span>, <p style=""> etc. sab ko handle karega
     text = re.sub(r'<[^>]+>', ' ', text)
     
-    # 4. HTML entities (jaise &lt;, &gt;, &amp;) ko decode karein
-    text = html.unescape(text)
-    
-    # 5. (NAYA) &nbsp; (jo ab \xa0 ban gaya hai) ko explicitly space se replace karein
+    # 5. &nbsp; (jo ab \xa0 ban gaya hai) ko explicitly space se replace karein
     text = text.replace('\xa0', ' ')
     
     # 6. Extra whitespace ko clean karein
