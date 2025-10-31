@@ -42,16 +42,34 @@ def _clean_math_tex(math_string: str) -> str:
 def _clean_html_to_text(html_string: str) -> str:
     """
     Ek simple HTML remover jo HTML ko plain text mein convert karta hai.
-    (MODIFIED: Sabhi tags aur &nbsp; ko explicitly handle karne ke liye)
+    (MODIFIED: Superscripts aur special symbols (like &sum;) ko handle karne ke liye)
     """
     if not html_string:
         return ""
     
-    # 1. (NAYA ORDER) HTML entities (jaise &lt;, &gt;, &amp;, &nbsp;) ko decode karein
-    # Isse "&lt;p&gt;" asli "<p>" ban jayega. "&nbsp;" -> \xa0
+    # 1. HTML entities ko decode karein (double-decoding ke liye do baar)
+    # Yeh '&amp;sum;' ko '&sum;' aur fir '∑' bana dega.
     text = html.unescape(html_string)
+    text = html.unescape(text) 
 
-    # 2. Math-tex spans ko pehle process karein
+    # 2. (NAYA) Common superscript/subscript tags ko unke Unicode char se replace karein
+    #    Yeh '</span><sup>2</sup>' ko '²' mein badalne mein madat karega
+    
+    # Pehle </span> ko hatayein jo seedha <sup> se pehle aata hai
+    # Taki "km</span><sup>2</sup>" -> "km<sup>2</sup>" ban jaaye
+    text = re.sub(r'</span>(<sup>.*?</sup>)', r'\1', text, flags=re.IGNORECASE)
+    
+    # Ab common superscripts ko replace karein
+    text = re.sub(r'<sup>2</sup>', '²', text, flags=re.IGNORECASE)
+    text = re.sub(r'<sup>3</sup>', '³', text, flags=re.IGNORECASE)
+    text = re.sub(r'<sup>\+</sup>', '⁺', text, flags=re.IGNORECASE) # Escape '+'
+    text = re.sub(r'<sup>-</sup>', '⁻', text, flags=re.IGNORECASE)
+    
+    # Common subscripts
+    text = re.sub(r'<sub>2</sub>', '₂', text, flags=re.IGNORECASE)
+    text = re.sub(r'<sub>3</sub>', '₃', text, flags=re.IGNORECASE)
+    
+    # 3. Math-tex spans ko pehle process karein
     def math_replacer(match):
         # Span ke andar ka content nikalein
         inner_html = match.group(1)
@@ -62,11 +80,11 @@ def _clean_html_to_text(html_string: str) -> str:
 
     text = re.sub(r'<span class="math-tex">(.*?)</span>', math_replacer, text, flags=re.DOTALL)
 
-    # 3. sub/sup tags ko handle karein (bina space add kiye)
-    text = re.sub(r'</?sub>', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'</?sup>', '', text, flags=re.IGNORECASE)
-    
     # 4. Baaki bache hue SABHI HTML tags ko remove karein (space ke saath)
+    #    (Isme bache hue <sub>, <sup>, <p>, <span> etc. sab aa jayenge)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    
+    # 5. &nbsp; ke dono forms (decoded aur literal) ko handle karein
     # Yeh <p>, </p>, <span style="">, </span>, <p style=""> etc. sab ko handle karega
     text = re.sub(r'<[^>]+>', ' ', text)
     
