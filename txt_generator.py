@@ -14,7 +14,6 @@ def _clean_math_tex(math_string: str) -> str:
     text = math_string.replace(r'\(', ' ').replace(r'\)', ' ')
     
     # \frac{A}{B} ko (A / B) se replace karein
-    # Yeh nested braces ke simple cases ko handle karta hai
     text = re.sub(r'\\frac{({[^}]+}|[^}]+)}{({[^}]+}|[^}]+)}', r'(\1 / \2)', text)
     
     # Subscripts jaise {C_u} ko Cu banayein
@@ -43,7 +42,7 @@ def _clean_math_tex(math_string: str) -> str:
 def _clean_html_to_text(html_string: str) -> str:
     """
     Ek simple HTML remover jo HTML ko plain text mein convert karta hai.
-    (MODIFIED: Math aur sub/sup tags ko handle karne ke liye)
+    (MODIFIED: Sabhi tags aur &nbsp; ko explicitly handle karne ke liye)
     """
     if not html_string:
         return ""
@@ -51,7 +50,6 @@ def _clean_html_to_text(html_string: str) -> str:
     text = html_string
 
     # 1. Math-tex spans ko pehle process karein
-    # Sabhi math-tex spans dhoondhein
     def math_replacer(match):
         # Span ke andar ka content nikalein
         inner_html = match.group(1)
@@ -67,13 +65,17 @@ def _clean_html_to_text(html_string: str) -> str:
     text = re.sub(r'</?sub>', '', text, flags=re.IGNORECASE)
     text = re.sub(r'</?sup>', '', text, flags=re.IGNORECASE)
     
-    # 3. Baaki bache hue HTML tags ko remove karein (space ke saath)
+    # 3. Baaki bache hue SABHI HTML tags ko remove karein (space ke saath)
+    # Yeh <p>, </p>, <span style="">, </span>, <p style=""> etc. sab ko handle karega
     text = re.sub(r'<[^>]+>', ' ', text)
     
-    # 4. HTML entities (jaise &nbsp; &amp;) ko decode karein
+    # 4. HTML entities (jaise &lt;, &gt;, &amp;) ko decode karein
     text = html.unescape(text)
     
-    # 5. Extra whitespace ko clean karein
+    # 5. (NAYA) &nbsp; (jo ab \xa0 ban gaya hai) ko explicitly space se replace karein
+    text = text.replace('\xa0', ' ')
+    
+    # 6. Extra whitespace ko clean karein
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
@@ -163,8 +165,6 @@ def generate_txt(quiz_data: dict, details: dict) -> str:
         
         # --- REMOVED ---
         # Solution line has been removed as requested by user.
-        # solution_text = _get_localized_text(q.get('solution', {}))
-        # output_lines.append(f"  Solution: {solution_text}")
         # --- END REMOVED ---
         
         output_lines.append("\n" + "-" * 30 + "\n")
