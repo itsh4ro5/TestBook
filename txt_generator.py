@@ -48,7 +48,7 @@ def _clean_html_to_text(html_string: str) -> str:
         return ""
     
     # 1. (NAYA ORDER) HTML entities (jaise &lt;, &gt;, &amp;, &nbsp;) ko decode karein
-    # Isse "&lt;p&gt;" asli "<p>" ban jayega
+    # Isse "&lt;p&gt;" asli "<p>" ban jayega. "&nbsp;" -> \xa0
     text = html.unescape(html_string)
 
     # 2. Math-tex spans ko pehle process karein
@@ -70,46 +70,55 @@ def _clean_html_to_text(html_string: str) -> str:
     # Yeh <p>, </p>, <span style="">, </span>, <p style=""> etc. sab ko handle karega
     text = re.sub(r'<[^>]+>', ' ', text)
     
-    # 5. &nbsp; (jo ab \xa0 ban gaya hai) ko explicitly space se replace karein
+    # 5. (MODIFIED) &nbsp; ke dono forms (decoded aur literal) ko handle karein
+    # \xa0 (decoded non-breaking space)
     text = text.replace('\xa0', ' ')
+    # '&nbsp;' (literal string agar double-encoded tha)
+    text = text.replace('&nbsp;', ' ')
     
     # 6. Extra whitespace ko clean karein
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
 
-def _get_localized_text(content_object, lang='en'):
+def _get_specific_text(content_object, lang_code):
     """
-    HTML content ko safely extract aur clean karta hai.
+    HTML content ko safely extract aur clean karta hai, specific language ke liye.
+    Returns None agar language nahi milti.
+    (MODIFIED: 'hi' aur 'hn' ko handle karne ke liye)
     """
     if not content_object or not isinstance(content_object, dict):
-        return "N/A"
+        return None
         
-    # Pehle 'en' try karein, fir 'hi', fir 'hn', fir koi bhi pehli available language
-    lang_priority = [lang, 'en', 'hi', 'hn']
-    
     html_content = None
     
-    for l in lang_priority:
-        if l in content_object:
-            html_content = content_object[l]
-            break
-            
-    if not html_content and content_object:
-        # Agar priority languages nahi mili, toh pehli available lein
-        first_lang_key = next(iter(content_object))
-        html_content = content_object[first_lang_key]
+    # Hindi ke liye 'hi' aur 'hn' dono check karein
+    if lang_code == 'hi':
+        if 'hi' in content_object:
+            html_content = content_object['hi']
+        elif 'hn' in content_object:
+            html_content = content_object['hn']
+    elif lang_code in content_object:
+        html_content = content_object[lang_code]
+
+    if not html_content:
+        return None
 
     # Agar content ek dict hai (options ki tarah)
     if isinstance(html_content, dict) and 'value' in html_content:
         html_content = html_content.get('value', '')
+    elif isinstance(html_content, dict) and 'text' in html_content: # Options ke text ke liye
+         html_content = html_content.get('text', '')
 
-    return _clean_html_to_text(html_content)
+    cleaned_text = _clean_html_to_text(html_content)
+    # Return None if cleaned text is empty, taki comparison mein aasani ho
+    return cleaned_text if cleaned_text else None
+
 
 def generate_txt(quiz_data: dict, details: dict) -> str:
     """
     JSON data aur test details se ek complete TXT string generate karta hai.
-    (MODIFIED: Solution part ko hata diya gaya hai)
+    (MODIFIED: Solution part ko hata diya gaya hai aur English/Hindi dono add kiye gaye hain)
     """
     if not quiz_data or 'questions' not in quiz_data:
         return "Error: Invalid Quiz Data."
@@ -129,37 +138,58 @@ def generate_txt(quiz_data: dict, details: dict) -> str:
     # --- Questions Loop ---
     for i, q in enumerate(quiz_data.get('questions', [])):
         
-        # Question
-        q_text = _get_localized_text(q.get('content', {}))
-        output_lines.append(f"Q.{i + 1}: {q_text}")
+        # --- Question (English and Hindi) ---
+        q_text_en = _get_specific_text(q.get('content', {}), 'en') or ""
+        q_text_hi = _get_specific_text(q.get('content', {}), 'hi') or ""
         
-        # Options
-        options = q.get('options', {})
-        options_list = []
+        output_lines.append(f"Q.{i + 1}: {q_text_en}")
+        # Hindi tabhi add karein jab woh non-empty ho aur English se alag ho
+        if q_text_hi and q_text_hi != q_text_en:
+            output_lines.append(f"    {q_text_hi}")
         
-        # Options ko 'en' (ya default) key se extract karein
-        if 'en' in options:
-            options_list = options['en']
-        elif options:
-            first_lang_key = next(iter(options))
-            options_list = options[first_lang_key]
+        # --- Options (English and Hindi) ---
+        options_data = q.get('options', {})
+        options_list_en = options_data.get('en', [])
+        # Hindi ke liye 'hi' ya 'hn' (fallback)
+        options_list_hi = options_data.get('hi', options_data.get('hn', [])) 
             
-        correct_option_text = "N/A"
+        correct_option_text_en = "N/A"
+        correct_option_text_hi = "N/A"
         
-        if not isinstance(options_list, list):
-            output_lines.append("  (Error: Options format not recognized)")
+        if not isinstance(options_list_en, list):
+            output_lines.append("  (Error: English options format not recognized)")
             continue
 
-        for j, opt in enumerate(options_list):
-            opt_text = _clean_html_to_text(opt.get('text', ''))
-            option_char = chr(ord('a') + j) # (a), (b), (c)...
-            output_lines.append(f"  ({option_char}) {opt_text}")
-            
-            if opt.get('is_correct', False):
-                correct_option_text = opt_text
+        for j, opt_en in enumerate(options_list_en):
+            opt_text_en = _clean_html_to_text(opt_en.get('text', ''))
+            opt_text_hi = ""
 
-        # Answer (Correct Option Text)
-        output_lines.append(f"\n  Answer: {correct_option_text}")
+            # Corresponding Hindi option find karein
+            if isinstance(options_list_hi, list) and j < len(options_list_hi):
+                opt_hi = options_list_hi[j]
+                if opt_hi:
+                    opt_text_hi = _clean_html_to_text(opt_hi.get('text', ''))
+
+            option_char = chr(ord('a') + j) # (a), (b), (c)...
+            
+            final_opt_text = opt_text_en
+            # Hindi tabhi add karein jab woh non-empty ho aur English se alag ho
+            if opt_text_hi and opt_text_hi != opt_text_en:
+                final_opt_text += f" / {opt_text_hi}"
+                
+            output_lines.append(f"  ({option_char}) {final_opt_text}")
+            
+            if opt_en.get('is_correct', False):
+                correct_option_text_en = opt_text_en
+                # Hindi text tabhi store karein jab woh valid ho aur English se alag ho
+                correct_option_text_hi = opt_text_hi if (opt_text_hi and opt_text_hi != opt_text_en) else ""
+
+        # --- Answer (English and Hindi) ---
+        final_correct_text = correct_option_text_en
+        if correct_option_text_hi:
+            final_correct_text += f" / {correct_option_text_hi}"
+            
+        output_lines.append(f"\n  Answer: {final_correct_text}")
         
         # --- REMOVED ---
         # Solution line has been removed as requested by user.
