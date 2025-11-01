@@ -144,11 +144,17 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     context.user_data['last_bot_message_id'] = message.message_id
 
 def get_config():
-    """Config file (token/channel) load karta hai."""
-    return load_json(CONFIG_FILE, {"testbook_token": None, "forward_channel_id": None})
+    """Config file (token/channel/link) load karta hai."""
+    # --- NAYA: Default mein private_invite_link add kiya ---
+    default_config = {
+        "testbook_token": None, 
+        "forward_channel_id": None,
+        "private_invite_link": None # Naya field
+    }
+    return load_json(CONFIG_FILE, default_config)
 
 def save_config(config_data):
-    """Config file (token/channel) save karta hai."""
+    """Config file (token/channel/link) save karta hai."""
     save_json(CONFIG_FILE, config_data)
 
 def init_extractor():
@@ -285,6 +291,55 @@ async def view_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"ℹ️ Current forward channel hai: `{channel_id}`", parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text("ℹ️ Koi forward channel set nahi hai.")
+
+
+# --- NAYE COMMANDS: Private Link ke liye ---
+
+@admin_required
+async def set_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin/Owner) HTML button ke liye private invite link set karta hai."""
+    try:
+        new_link = context.args[0]
+        # Check karein ki link valid Telegram invite link hai
+        if not (new_link.startswith('https://t.me/joinchat/') or new_link.startswith('https://t.me/+')):
+            await update.message.reply_text(
+                "⚠️ Invalid Link. Link `https://t.me/joinchat/...` ya `https://t.me/+...` jaisa hona chahiye.\n\n"
+                "Agar aapka channel public hai, toh /setchannel ka istemal karein, is command ki zaroorat nahi hai.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        config = get_config()
+        config['private_invite_link'] = new_link
+        save_config(config)
+        await update.message.reply_text(f"✅ Private invite link set kar diya gaya hai: `{new_link}`", parse_mode=ParseMode.MARKDOWN)
+        
+    except (IndexError, ValueError):
+        await update.message.reply_text("Usage: /setlink <https://t.me/joinchat/... wala link>")
+
+@admin_required
+async def remove_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin/Owner) Private invite link ko remove karta hai."""
+    config = get_config()
+    if 'private_invite_link' in config and config['private_invite_link'] is not None:
+        config['private_invite_link'] = None
+        save_config(config)
+        await update.message.reply_text("✅ Private invite link hata diya gaya hai.")
+    else:
+        await update.message.reply_text("ℹ️ Koi private invite link pehle se set nahi hai.")
+
+@admin_required
+async def view_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin/Owner) Current private invite link dikhata hai."""
+    config = get_config()
+    link = config.get('private_invite_link')
+    if link:
+        await update.message.reply_text(f"ℹ️ Current private invite link hai: `{link}`", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text("ℹ️ Koi private invite link set nahi hai. Bot public channel ID (agar set hai) istemal karega.")
+
+# --- END NAYE COMMANDS ---
+
 
 # =============================================================================
 # === PUBLIC COMMANDS & BOT LOGIC ===
@@ -609,9 +664,17 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
         
         files_to_send = []
         
+        # --- NAYA: Config load karein taaki channel link mil sake ---
+        config = get_config()
+        invite_link = config.get('private_invite_link')
+        public_channel_id = config.get('forward_channel_id')
+        # Private link ko priority dein, agar nahi hai toh public ID use karein
+        link_for_button = invite_link if invite_link else public_channel_id
+        # --- END NAYA ---
+        
         # Generate HTML if needed
         if file_format in ['html', 'both']:
-            html_content = generate_html(questions_data, extractor.last_details)
+            html_content = generate_html(questions_data, extractor.last_details, channel_link=link_for_button) # Pass link
             html_file = io.BytesIO(html_content.encode('utf-8'))
             html_file.name = f"{base_file_name}.html"
             files_to_send.append(html_file)
@@ -638,7 +701,7 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
             sent_messages.append(sent_msg)
         
         # Auto-forward karein (agar set hai)
-        config = get_config()
+        # config = get_config() # Pehle hi load kar liya hai
         channel_id = config.get('forward_channel_id')
         if channel_id:
             try:
@@ -1007,6 +1070,14 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
         last_update_time = asyncio.get_event_loop().time()
         completed_in_this_batch = 0 # Variable ka naam badal diya
 
+        # --- NAYA: Config (link ke liye) ko loop ke bahar ek baar load karein ---
+        config = get_config()
+        invite_link = config.get('private_invite_link')
+        public_channel_id = config.get('forward_channel_id')
+        # Private link ko priority dein, agar nahi hai toh public ID use karein
+        link_for_button = invite_link if invite_link else public_channel_id
+        # --- END NAYA ---
+
         for test, sec, sub in tests_to_process:
             # Check for stop flag using user_chat_id as key in bot_data
             if context.bot_data.get(user_chat_id, {}).get(STOP_BULK_DOWNLOAD_FLAG, False):
@@ -1042,7 +1113,7 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                 
                 # Generate HTML if needed
                 if file_format in ['html', 'both']:
-                    html_content = generate_html(questions_data, extractor.last_details)
+                    html_content = generate_html(questions_data, extractor.last_details, channel_link=link_for_button) # Pass link
                     html_file = io.BytesIO(html_content.encode('utf-8'))
                     html_file.name = f"{base_file_name}.html"
                     files_to_send.append(html_file)
@@ -1150,7 +1221,8 @@ def main():
     
     # Pehli baar config files load/create karein
     load_json(ADMIN_FILE, {'admin_ids': []})
-    load_json(CONFIG_FILE, {"testbook_token": None, "forward_channel_id": None})
+    # --- NAYA: Default config yahaan set hoga ---
+    get_config() 
     
     # Extractor ko initialize karein
     if not init_extractor():
@@ -1199,6 +1271,12 @@ def main():
     application.add_handler(CommandHandler("removechannel", remove_channel))
     application.add_handler(CommandHandler("viewchannel", view_channel))
     application.add_handler(CommandHandler("stop", stop_bulk_download)) 
+    
+    # --- NAYE HANDLERS: Link ke liye ---
+    application.add_handler(CommandHandler("setlink", set_link))
+    application.add_handler(CommandHandler("removelink", remove_link))
+    application.add_handler(CommandHandler("viewlink", view_link))
+    # --- END NAYE HANDLERS ---
 
     application.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$")) # Keep main menu callback
 
@@ -1214,3 +1292,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
