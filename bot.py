@@ -1132,7 +1132,7 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                     await context.bot.send_document(
                         chat_id=final_chat_id,
                         document=file_to_send,
-                        caption=caption if i == 0 else None, # Sirf pehli file par caption
+                        caption=caption, # Sirf pehli file par caption
                         parse_mode=ParseMode.MARKDOWN
                     )
                 
@@ -1292,4 +1292,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
