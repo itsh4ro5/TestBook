@@ -159,6 +159,8 @@ HTML_TEMPLATE = """
             </div>
             <div class="mt-8 space-y-4">
                  <button onclick="startQuiz()" class="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition duration-300 flex items-center justify-center gap-2"><i class="fas fa-play"></i> Start Test</button>
+                 <!-- NAYA: Join Channel Button Placeholder -->
+                 _JOIN_CHANNEL_BUTTON_HTML_
                  <!-- Telegram link ko hata dete hain, kyonki hum already Telegram mein hain
                  <a href="https://t.me/+LEGNpv9ucWMyZjkx" target="_blank" class="w-full bg-sky-500 text-white py-3 rounded-lg font-semibold hover:bg-sky-600 transition duration-300 flex items-center justify-center gap-2"><i class="fab fa-telegram-plane"></i> Join Telegram Channel</a>
                  -->
@@ -728,10 +730,11 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def generate_html(quiz_data: dict, details: dict) -> str:
+def generate_html(quiz_data: dict, details: dict, channel_link: str | None = None) -> str:
     """
     JSON data aur test details se ek complete HTML string generate karta hai.
     AI feature hata diya gaya hai. MathJax comment out hai. Firebase hata diya gaya hai.
+    (MODIFIED: 'channel_link' parameter add kiya gaya hai)
     """
     if not quiz_data or 'questions' not in quiz_data:
         # Agar quiz_data valid nahi hai toh ek error HTML return karein
@@ -790,6 +793,29 @@ def generate_html(quiz_data: dict, details: dict) -> str:
              value = ''
         return html.escape(str(value), quote=True)
 
+    # --- NAYA: Channel Button HTML Generate Karein (Updated Logic) ---
+    channel_button_html = ""
+    channel_link_url = None
+    
+    if channel_link:
+        # @username ko full link banayein
+        if channel_link.startswith('@'):
+            channel_link_url = f"https://t.me/{channel_link[1:]}"
+        # Check karein ki yeh pehle se hi ek valid private ya public link hai
+        elif channel_link.startswith("https://t.me/joinchat/") or \
+             channel_link.startswith("https://t.me/+") or \
+             (channel_link.startswith("https://t.me/") and not channel_link.startswith("https://t.me/joinchat/")): # Public link
+            channel_link_url = channel_link
+        # Agar -100... wala ID hai, toh channel_link_url None hi rahega (jo sahi hai)
+            
+    if channel_link_url:
+        channel_button_html = f'''
+        <a href="{safe_html_escape(channel_link_url)}" target="_blank" class="w-full bg-sky-500 text-white py-3 rounded-lg font-semibold hover:bg-sky-600 transition duration-300 flex items-center justify-center gap-2">
+            <i class="fab fa-telegram"></i> Join Telegram Channel
+        </a>'''
+    # --- END NAYA ---
+
+
     replacements = {
         '_TEST_NAME_': safe_html_escape(details.get('Test Name', quiz_data.get('title', 'Online Mock Test'))),
         '_TEST_SERIES_': safe_html_escape(details.get('Test Series', '')),
@@ -805,6 +831,7 @@ def generate_html(quiz_data: dict, details: dict) -> str:
         # JS ke liye float values use karein
         '_JS_CORRECT_MARKS_VALUE_': str(correct_marks_js),
         '_JS_INCORRECT_MARKS_VALUE_': str(incorrect_marks_js),
+        '_JOIN_CHANNEL_BUTTON_HTML_': channel_button_html, # Naya placeholder
     }
 
     for placeholder, value in replacements.items():
@@ -856,11 +883,12 @@ if __name__ == '__main__':
         "Incorrect": "-1.5"
     }
 
-    # Generate HTML
-    generated_html = generate_html(sample_quiz_data, sample_details)
+    # Generate HTML (private link ke saath test karein)
+    generated_html = generate_html(sample_quiz_data, sample_details, channel_link="https://t.me/joinchat/ABC123XYZ")
 
     # Save to file
     with open("sample_output.html", "w", encoding="utf-8") as f:
         f.write(generated_html)
         
-    print("Generated sample_output.html")
+    print("Generated sample_output.html (with private link)")
+
