@@ -42,7 +42,7 @@ def _clean_math_tex(math_string: str) -> str:
 def _clean_html_to_text(html_string: str) -> str:
     """
     Ek simple HTML remover jo HTML ko plain text mein convert karta hai.
-    (MODIFIED: Superscripts aur special symbols (like &sum;) ko handle karne ke liye)
+    (MODIFIED: Superscripts, special symbols, aur IMAGE LINKS ko handle karne ke liye)
     """
     if not html_string:
         return ""
@@ -80,21 +80,36 @@ def _clean_html_to_text(html_string: str) -> str:
 
     text = re.sub(r'<span class="math-tex">(.*?)</span>', math_replacer, text, flags=re.DOTALL)
 
-    # 4. Baaki bache hue SABHI HTML tags ko remove karein (space ke saath)
+    # 4. (NAYA) Image URLs ko fix karein (protocol add karein)
+    #    Yeh raw HTML string 'text' par kaam karega
+    text = re.sub(r'src=(["\'])\/\/', r'src=\1https://', text, flags=re.IGNORECASE)
+    
+    # 5. (NAYA) Root-relative URLs ko fix karein (domain add karein)
+    text = re.sub(r'src=(["\'])\/([^\/])', r'src=\1https://testbook.com/\2', text, flags=re.IGNORECASE)
+    
+    # 6. (NAYA) <img> tags ko unke src link se replace karein
+    def img_replacer(match):
+        # Group 2 mein URL capture hoga
+        url = match.group(2)
+        if url:
+            return f" [Image: {url}] "
+        return " [Image: Link not found] " # Fallback
+        
+    # Yeh regex <img ... src="..." ...> ko dhoondhega
+    text = re.sub(r'<img [^>]*src=(["\'])(.*?)\1[^>]*>', img_replacer, text, flags=re.IGNORECASE | re.DOTALL)
+
+
+    # 7. Baaki bache hue SABHI HTML tags ko remove karein (space ke saath)
     #    (Isme bache hue <sub>, <sup>, <p>, <span> etc. sab aa jayenge)
     text = re.sub(r'<[^>]+>', ' ', text)
     
-    # 5. &nbsp; ke dono forms (decoded aur literal) ko handle karein
-    # Yeh <p>, </p>, <span style="">, </span>, <p style=""> etc. sab ko handle karega
-    text = re.sub(r'<[^>]+>', ' ', text)
-    
-    # 5. (MODIFIED) &nbsp; ke dono forms (decoded aur literal) ko handle karein
+    # 8. &nbsp; ke dono forms (decoded aur literal) ko handle karein
     # \xa0 (decoded non-breaking space)
     text = text.replace('\xa0', ' ')
     # '&nbsp;' (literal string agar double-encoded tha)
     text = text.replace('&nbsp;', ' ')
     
-    # 6. Extra whitespace ko clean karein
+    # 9. Extra whitespace ko clean karein
     text = re.sub(r'\s+', ' ', text).strip()
     
     return text
@@ -216,4 +231,3 @@ def generate_txt(quiz_data: dict, details: dict) -> str:
         output_lines.append("\n" + "-" * 30 + "\n")
 
     return "\n".join(output_lines)
-
