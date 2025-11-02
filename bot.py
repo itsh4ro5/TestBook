@@ -418,8 +418,8 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
 
         format_choice = text.lower()
-        if format_choice not in ['html', 'txt', 'both']:
-            await update.message.reply_text("Invalid format. Kripya `html`, `txt`, ya `both` type karein.")
+        if format_choice not in ['html', 'txt', 'json', 'both', 'all']: # Add 'json' and 'all'
+            await update.message.reply_text("Invalid format. Kripya `html`, `txt`, `json`, `both`, ya `all` type karein.")
             return # State ko active rakhein
 
         # Format valid hai, process download
@@ -593,7 +593,8 @@ async def text_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 await update.message.reply_text(
                     f"Aapne test select kiya: `{selected_test_info['test_data'].get('title')}`\n\n"
                     "Aapko kaunsa format chahiye?\n"
-                    "Kripya reply karein: `html`, `txt`, ya `both`",
+                    "Kripya reply karein: `html`, `txt`, `json`\n"
+                    "('`both`' = html+txt, '`all`' = html+txt+json)",
                     parse_mode=ParseMode.MARKDOWN
                 )
                 
@@ -673,19 +674,26 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
         # --- END NAYA ---
         
         # Generate HTML if needed
-        if file_format in ['html', 'both']:
+        if file_format in ['html', 'both', 'all']:
             html_content = generate_html(questions_data, extractor.last_details, channel_link=link_for_button) # Pass link
             html_file = io.BytesIO(html_content.encode('utf-8'))
             html_file.name = f"{base_file_name}.html"
             files_to_send.append(html_file)
         
         # Generate TXT if needed
-        if file_format in ['txt', 'both']:
+        if file_format in ['txt', 'both', 'all']:
             # --- FIXED: extractor.last_details ko pass kiya ---
             txt_content = generate_txt(questions_data, extractor.last_details) # Use new generator
             txt_file = io.BytesIO(txt_content.encode('utf-8'))
             txt_file.name = f"{base_file_name}.txt"
             files_to_send.append(txt_file)
+
+        # --- NAYA: Generate JSON if needed ---
+        if file_format in ['json', 'all']:
+            json_content = json.dumps(questions_data, indent=4, ensure_ascii=False)
+            json_file = io.BytesIO(json_content.encode('utf-8'))
+            json_file.name = f"{base_file_name}.json"
+            files_to_send.append(json_file)
 
         # Processing message delete karein
         await processing_message.delete()
@@ -695,7 +703,7 @@ async def process_single_test_download(update: Update, context: ContextTypes.DEF
         for i, file_to_send in enumerate(files_to_send):
             sent_msg = await update.message.reply_document(
                 document=file_to_send,
-                caption=caption, # <-- YEH BADLAAV HAI
+                caption=caption, # NAYA: Caption sabhi files par
                 parse_mode=ParseMode.MARKDOWN
             )
             sent_messages.append(sent_msg)
@@ -895,7 +903,9 @@ async def receive_destination(update: Update, context: ContextTypes.DEFAULT_TYPE
         "Kripya reply karein:\n"
         "- `html` (Sirf HTML files)\n"
         "- `txt` (Sirf Text files)\n"
-        "- `both` (HTML aur TXT dono)\n\n"
+        "- `json` (Sirf JSON files)\n"
+        "- `both` (HTML aur TXT dono)\n"
+        "- `all` (HTML, TXT, aur JSON teeno)\n\n"
         "Cancel karne ke liye /cancel type karein."
     )
     
@@ -911,8 +921,8 @@ async def receive_format_bulk(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     file_format = update.message.text.strip().lower()
     
-    if file_format not in ['html', 'txt', 'both']:
-        await update.message.reply_text("Invalid format. Kripya `html`, `txt`, ya `both` type karein.")
+    if file_format not in ['html', 'txt', 'json', 'both', 'all']: # Add 'json' and 'all'
+        await update.message.reply_text("Invalid format. Kripya `html`, `txt`, `json`, `both`, ya `all` type karein.")
         return ASK_FORMAT_BULK # State ko active rakhein
 
     context.user_data['bulk_format'] = file_format
@@ -1112,19 +1122,26 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                 files_to_send = []
                 
                 # Generate HTML if needed
-                if file_format in ['html', 'both']:
+                if file_format in ['html', 'both', 'all']:
                     html_content = generate_html(questions_data, extractor.last_details, channel_link=link_for_button) # Pass link
                     html_file = io.BytesIO(html_content.encode('utf-8'))
                     html_file.name = f"{base_file_name}.html"
                     files_to_send.append(html_file)
                 
                 # Generate TXT if needed
-                if file_format in ['txt', 'both']:
+                if file_format in ['txt', 'both', 'all']:
                     # --- FIXED: extractor.last_details ko pass kiya ---
                     txt_content = generate_txt(questions_data, extractor.last_details) # Use new generator
                     txt_file = io.BytesIO(txt_content.encode('utf-8'))
                     txt_file.name = f"{base_file_name}.txt"
                     files_to_send.append(txt_file)
+                
+                # --- NAYA: Generate JSON if needed ---
+                if file_format in ['json', 'all']:
+                    json_content = json.dumps(questions_data, indent=4, ensure_ascii=False)
+                    json_file = io.BytesIO(json_content.encode('utf-8'))
+                    json_file.name = f"{base_file_name}.json"
+                    files_to_send.append(json_file)
 
                 
                 # 4. Files ko destination par send karein
@@ -1132,7 +1149,7 @@ async def perform_bulk_download(update: Update, context: ContextTypes.DEFAULT_TY
                     await context.bot.send_document(
                         chat_id=final_chat_id,
                         document=file_to_send,
-                        caption=caption, # Sirf pehli file par caption
+                        caption=caption, # NAYA: Caption sabhi files par
                         parse_mode=ParseMode.MARKDOWN
                     )
                 
@@ -1292,5 +1309,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-
 
